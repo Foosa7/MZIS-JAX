@@ -206,12 +206,12 @@ class GUI:
         mk_btn("50:50", 0.5, 0.0)
         mk_btn("Cross", 0.0, 0.0)
 
-        # Quantum Demos
+        # Demos
         ttk.Separator(pad_frame, orient='horizontal').pack(fill='x', pady=20)
         
         self.demo_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         self.demo_frame.pack(fill=tk.X)
-        ttk.Label(self.demo_frame, text="Quantum Demos", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
+        ttk.Label(self.demo_frame, text="Demos", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
         
         btn_hom = ttk.Button(self.demo_frame, text="HOM Dip (2 Photons)", command=self._demo_hom)
         btn_hom.pack(fill=tk.X, pady=2)
@@ -626,10 +626,10 @@ class GUI:
         try:
             import sys
             import os
-            pnn_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+            pnn_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
             if pnn_dir not in sys.path:
                 sys.path.append(pnn_dir)
-            from pnn import decompose_clements
+            from decompose.pnn import decompose_clements
             
             phis, thetas, alphas = decompose_clements(U_target, block='mzi')
             

@@ -14,7 +14,9 @@ if __name__ == "__main__":
     # Generate random switching matrices for N=8, 12, 16 modes
     dims = [8, 12, 16]
     
-    output_dir = os.path.abspath(os.path.dirname(__file__))
+    # Save to the unitary/ directory one level up
+    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'unitary'))
+    os.makedirs(output_dir, exist_ok=True)
     
     for dim in dims:
         P = generate_random_switching(dim)
