@@ -219,6 +219,18 @@ class GUI:
         btn_rand = ttk.Button(self.demo_frame, text="Random Boson Sampling", command=self._demo_random)
         btn_rand.pack(fill=tk.X, pady=2)
         
+        decomp_frame = ttk.Frame(self.demo_frame, style="Panel.TFrame")
+        decomp_frame.pack(fill=tk.X, pady=2)
+        
+        btn_haar = ttk.Button(decomp_frame, text="Haar Random", command=self._demo_unitary_decomposition)
+        btn_haar.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        
+        btn_switch = ttk.Button(decomp_frame, text="Switching Matrix", command=self._demo_switching_decomposition)
+        btn_switch.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        
+        btn_import = ttk.Button(self.demo_frame, text="Import Unitary", command=self._import_unitary_decomposition)
+        btn_import.pack(fill=tk.X, pady=2)
+        
         btn_clear = ttk.Button(self.demo_frame, text="Reset to Identity", command=self._demo_clear)
         btn_clear.pack(fill=tk.X, pady=2)
 
@@ -556,6 +568,97 @@ class GUI:
                 self.phi_var.set(p_pi)
                 
         self._update_simulation()
+
+    def _demo_unitary_decomposition(self):
+        """Generates a random unitary, decomposes it via pnn.py, and sets the MZI phases."""
+        dim = self.n_modes
+        Z = np.random.randn(dim, dim) + 1j * np.random.randn(dim, dim)
+        Q, R = np.linalg.qr(Z)
+        d = np.diagonal(R)
+        ph = d / np.abs(d)
+        U_rand = Q @ np.diag(ph)
+        
+        self._apply_unitary_decomposition(U_rand)
+
+    def _demo_switching_decomposition(self):
+        """Generates a random permutation (switching) matrix and applies it to the mesh."""
+        dim = self.n_modes
+        P = np.zeros((dim, dim), dtype=np.complex128)
+        cols = np.random.permutation(dim)
+        for i in range(dim):
+            P[i, cols[i]] = 1.0
+            
+        self._apply_unitary_decomposition(P)
+
+    def _import_unitary_decomposition(self):
+        """Opens a file dialog to import a .npy or .npz unitary matrix and visualizes it."""
+        from tkinter import filedialog
+        filepath = filedialog.askopenfilename(
+            title="Select Unitary File",
+            filetypes=[("Numpy arrays", "*.npy *.npz"), ("All files", "*.*")]
+        )
+        if not filepath:
+            return
+            
+        try:
+            U_loaded = np.load(filepath)
+            if filepath.endswith('.npz'):
+                U_loaded = U_loaded[U_loaded.files[0]]
+                
+            if len(U_loaded.shape) != 2 or U_loaded.shape[0] != U_loaded.shape[1]:
+                raise ValueError("Array must be a 2D square matrix.")
+                
+            if U_loaded.shape[0] != self.n_modes:
+                print(f"Switching mesh to {U_loaded.shape[0]} modes to match loaded unitary.")
+                self._set_modes(U_loaded.shape[0])
+                
+            self._apply_unitary_decomposition(U_loaded)
+            
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Import Error", f"Failed to load unitary:\n{e}")
+
+    def _apply_unitary_decomposition(self, U_target):
+        """Decomposes a given unitary matrix and assigns the phases to the mesh."""
+        self._set_sim_mode("classical")
+        self._demo_clear(update=False)
+        
+        try:
+            import sys
+            import os
+            pnn_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+            if pnn_dir not in sys.path:
+                sys.path.append(pnn_dir)
+            from pnn import decompose_clements
+            
+            phis, thetas, alphas = decompose_clements(U_target, block='mzi')
+            
+            # Map to engine layout
+            # pnn.py 'theta' is half of engine's 'theta'
+            for col_idx, col in enumerate(self.engine.layout):
+                p = col_idx // 2
+                for mzi in col:
+                    q = mzi['mode_top']
+                    mid = mzi['id']
+                    
+                    theta_val = float(np.mod(2 * thetas[q, p], 2 * np.pi))
+                    phi_val = float(np.mod(phis[q, p], 2 * np.pi))
+                    
+                    self.phases[mid]['theta'] = theta_val
+                    self.phases[mid]['phi'] = phi_val
+                    
+                    if self.selected_mzi == mid:
+                        self.theta_var.set(theta_val / float(jnp.pi))
+                        self.phi_var.set(phi_val / float(jnp.pi))
+                        
+            # Set classical input to port 1 so we can see the routing
+            self.input_vars[0] = 1
+            self.input_labels[0].config(text="1")
+            
+            self._update_simulation()
+            
+        except Exception as e:
+            print(f"Decomposition failed: {e}")
 
     def _demo_clear(self, update=True):
         """Resets the mesh to Identity (all Bar state) and clears photons."""
