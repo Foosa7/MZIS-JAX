@@ -39,7 +39,8 @@ def ryser_permanent(M):
 
     # Popcount for inclusion-exclusion signs
     popcounts = jnp.sum(masks.real.astype(jnp.int32), axis=1)
-    signs = (-1.0) ** (popcounts + n)  # (-1)^(|S| + n) in Ryser formula with the global (-1)^n
+    is_odd = ((popcounts + n) % 2) == 1
+    signs = jnp.where(is_odd, -1.0 + 0j, 1.0 + 0j)
 
     return jnp.sum(signs * products)
 
@@ -65,10 +66,6 @@ class Engine:
         self.n_mzis = len(self.mzi_ids)
         self._id_to_idx = {mid: i for i, mid in enumerate(self.mzi_ids)}
 
-        # Phase arrays — flat JAX vectors, fully differentiable
-        self._thetas = jnp.full(self.n_mzis, jnp.pi)
-        self._phis = jnp.zeros(self.n_mzis)
-
         # Precompute column boundaries: list of (start_idx, count) into the flat arrays
         self._col_slices = []
         idx = 0
@@ -82,11 +79,6 @@ class Engine:
         for col in self.layout:
             tops = jnp.array([mzi['mode_top'] for mzi in col], dtype=jnp.int32)
             self._col_mode_tops.append(tops)
-
-        # Legacy dict interface for GUI compatibility (reads/writes sync with arrays)
-        self.phases = {}
-        for mid in self.mzi_ids:
-            self.phases[mid] = {'theta': float(jnp.pi), 'phi': 0.0}
 
     def _define_layout(self):
         """Defines the MZI connectivity in a checkerboard (Clements) pattern."""
@@ -115,16 +107,6 @@ class Engine:
                 col_mzis.append({'id': mzi_id, 'mode_top': start_mode + 2*k})
             cols.append(col_mzis)
         return cols
-
-    def _sync_phases_to_arrays(self):
-        """Sync the dict-based phases into the flat JAX arrays."""
-        thetas = []
-        phis = []
-        for mid in self.mzi_ids:
-            thetas.append(self.phases[mid]['theta'])
-            phis.append(self.phases[mid]['phi'])
-        self._thetas = jnp.array(thetas, dtype=jnp.float64)
-        self._phis = jnp.array(phis, dtype=jnp.float64)
 
     # ──────────────────────────────────────────────────────────────────────
     # Layer and full unitary construction (JAX-native)
@@ -169,14 +151,12 @@ class Engine:
         U_final, _ = jax.lax.scan(scan_fn, U, jnp.arange(n_mzis))
         return U_final
 
-    def get_layer_matrix(self, col_data):
+    def get_layer_matrix(self, thetas, phis, col_data):
         """Generates the unitary matrix for a single column of MZIs.
 
         Thin wrapper that slices into the phase arrays and calls the
         JIT-compiled static method.
         """
-        self._sync_phases_to_arrays()
-
         # Find which column this is
         col_idx = None
         for i, col in enumerate(self.layout):
@@ -194,11 +174,11 @@ class Engine:
                     break
 
         start, count = self._col_slices[col_idx]
-        thetas = self._thetas[start:start + count]
-        phis = self._phis[start:start + count]
+        col_thetas = thetas[start:start + count]
+        col_phis = phis[start:start + count]
         mode_tops = self._col_mode_tops[col_idx]
 
-        return self._build_layer_matrix(thetas, phis, mode_tops, self.n_modes)
+        return self._build_layer_matrix(col_thetas, col_phis, mode_tops, self.n_modes)
 
     @staticmethod
     @partial(jit, static_argnums=(4,))
@@ -257,10 +237,8 @@ class Engine:
         U_total, _ = jax.lax.scan(scan_body, U0, jnp.arange(n_cols))
         return U_total
 
-    def compute_full_unitary(self):
+    def compute_full_unitary(self, thetas, phis):
         """Computes the total unitary matrix of the entire Clements mesh."""
-        self._sync_phases_to_arrays()
-
         # Prepare static arrays for the JIT-compiled function
         col_slices_arr = jnp.array(self._col_slices, dtype=jnp.int32)
 
@@ -273,10 +251,9 @@ class Engine:
             padded_tops.append(padded)
         col_mode_tops_padded = jnp.stack(padded_tops)
 
-        # Pad phase arrays so dynamic_slice always has room without clamping start indices
         pad_total = max_mzis
-        thetas_padded = jnp.pad(self._thetas, (0, pad_total))
-        phis_padded = jnp.pad(self._phis, (0, pad_total))
+        thetas_padded = jnp.pad(thetas, (0, pad_total))
+        phis_padded = jnp.pad(phis, (0, pad_total))
 
         return self._compute_full_unitary(
             thetas_padded, phis_padded, col_slices_arr,
@@ -287,13 +264,12 @@ class Engine:
     # Classical power flow
     # ──────────────────────────────────────────────────────────────────────
 
-    def get_classical_flow(self, input_powers, coherent=False):
+    def get_classical_flow(self, thetas, phis, input_powers, coherent=False):
         """Calculates power distribution across each layer.
         
         If coherent=True, models coherent wave interference (used for quantum mode visual proxy).
         If coherent=False, assumes incoherent light, so powers add linearly (classical power).
         """
-        self._sync_phases_to_arrays()
         powers = []
 
         if coherent:
@@ -302,11 +278,11 @@ class Engine:
 
             for col_idx, col_data in enumerate(self.layout):
                 start, count = self._col_slices[col_idx]
-                thetas = self._thetas[start:start + count]
-                phis = self._phis[start:start + count]
+                col_thetas = thetas[start:start + count]
+                col_phis = phis[start:start + count]
                 mode_tops = self._col_mode_tops[col_idx]
 
-                U_layer = self._build_layer_matrix(thetas, phis, mode_tops, self.n_modes)
+                U_layer = self._build_layer_matrix(col_thetas, col_phis, mode_tops, self.n_modes)
                 state_c = U_layer @ state_c
                 powers.append(jnp.abs(state_c) ** 2)
         else:
@@ -315,11 +291,11 @@ class Engine:
 
             for col_idx, col_data in enumerate(self.layout):
                 start, count = self._col_slices[col_idx]
-                thetas = self._thetas[start:start + count]
-                phis = self._phis[start:start + count]
+                col_thetas = thetas[start:start + count]
+                col_phis = phis[start:start + count]
                 mode_tops = self._col_mode_tops[col_idx]
 
-                U_layer = self._build_layer_matrix(thetas, phis, mode_tops, self.n_modes)
+                U_layer = self._build_layer_matrix(col_thetas, col_phis, mode_tops, self.n_modes)
                 power_trans = jnp.abs(U_layer) ** 2
                 state_p = power_trans @ state_p
                 powers.append(state_p)
@@ -330,17 +306,17 @@ class Engine:
     # Fock state propagation (vectorized via vmap)
     # ──────────────────────────────────────────────────────────────────────
 
-    def propagate_fock(self, input_occupation):
+    def propagate_fock(self, thetas, phis, input_occupation):
         """Simulates quantum photon propagation via vectorized permanents.
 
-        Uses jax.vmap to compute permanents for all output Fock states
-        simultaneously, eliminating the Python loop over basis states.
+        Uses jax.lax.map to compute permanents for all output Fock states
+        sequentially, keeping memory footprint low.
         """
         n_photons = sum(input_occupation)
         if n_photons == 0:
-            return {}, []
+            return jnp.array([]), []
 
-        U = self.compute_full_unitary()
+        U = self.compute_full_unitary(thetas, phis)
 
         # Input mode indices (repeated for boson occupation)
         in_indices = []
@@ -380,22 +356,13 @@ class Engine:
         # We want to select rows out_indices_arr and columns in_indices for each basis state
         all_U_sub = U[out_indices_arr][:, :, in_indices]  # shape: (n_basis, n_photons, n_photons)
 
-        # Batch compute permanents using JAX vmap
-        # Because we vmap a static function (ryser_permanent), JAX caches this compilation
-        all_perms = vmap(ryser_permanent)(all_U_sub)
+        # Map compute permanents using JAX lax.map to prevent OOM
+        all_perms = jax.lax.map(ryser_permanent, all_U_sub)
         all_perm_sq = jnp.abs(all_perms) ** 2
         
         all_probs = all_perm_sq / (norm_in * norm_out)
 
-        # Convert to dict (filter small probabilities)
-        results = {}
-        probs_np = all_probs  # keep as jax array, convert at access
-        for i, out_state in enumerate(basis):
-            p = float(probs_np[i])
-            if p > 0.0001:
-                results[out_state] = p
-
-        return results, basis
+        return all_probs, basis
 
 
 # ──────────────────────────────────────────────────────────────────────────────

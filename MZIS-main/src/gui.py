@@ -33,6 +33,10 @@ class GUI:
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
         
+        self.phases = {}
+        for mid in self.engine.mzi_ids:
+            self.phases[mid] = {'theta': float(jnp.pi), 'phi': 0.0}
+        
         self._setup_styles()
         self._create_layout()
         
@@ -118,13 +122,13 @@ class GUI:
         mode_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         mode_frame.pack(fill=tk.X, pady=(0, 15))
         
-        self.btn_q = tk.Button(mode_frame, text="Quantum", width=12, bg=self.colors['accent'], fg="black", bd=0, 
+        self.btn_q = tk.Button(mode_frame, text="Quantum", bg=self.colors['accent'], fg="black", bd=0, 
                                font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("quantum"))
-        self.btn_q.pack(side=tk.LEFT, padx=(0, 5))
+        self.btn_q.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
         
-        self.btn_c = tk.Button(mode_frame, text="Classical", width=12, bg="#333", fg="white", bd=0, 
+        self.btn_c = tk.Button(mode_frame, text="Classical", bg="#333", fg="white", bd=0, 
                                font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("classical"))
-        self.btn_c.pack(side=tk.LEFT, padx=5)
+        self.btn_c.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
         
         # Initialize button colors
         if self.sim_mode.get() == "classical":
@@ -184,8 +188,8 @@ class GUI:
                              resolution=0.01, command=lambda x: self._on_param_change())
             scale.pack(fill=tk.X)
             
-        create_slider(self.mzi_frame, "Internal phase (θ) - Splitting", self.theta_var, float(jnp.pi))
-        create_slider(self.mzi_frame, "External phase (φ) - Phase Shift", self.phi_var, float(2*jnp.pi))
+        create_slider(self.mzi_frame, "Internal phase (θ) - Splitting (xπ)", self.theta_var, 2.0)
+        create_slider(self.mzi_frame, "External phase (φ) - Phase Shift (xπ)", self.phi_var, 2.0)
 
         # preset buttons
         ttk.Label(self.mzi_frame, text="Quick Presets", style="Panel.TLabel").pack(anchor="w", pady=(15, 5))
@@ -198,9 +202,9 @@ class GUI:
             b = ttk.Button(btn_frame, text=txt, command=lambda: self._set_preset(t, p))
             b.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
             
-        mk_btn("Bar", float(jnp.pi), 0)
-        mk_btn("50:50", float(jnp.pi/2), 0)
-        mk_btn("Cross", 0, 0)
+        mk_btn("Bar", 1.0, 0.0)
+        mk_btn("50:50", 0.5, 0.0)
+        mk_btn("Cross", 0.0, 0.0)
 
         # Quantum Demos
         ttk.Separator(pad_frame, orient='horizontal').pack(fill='x', pady=20)
@@ -277,10 +281,20 @@ class GUI:
         self.selected_mzi = None
         self.input_vars = [0] * n
         
+        self.phases = {}
+        for mid in self.engine.mzi_ids:
+            self.phases[mid] = {'theta': float(jnp.pi), 'phi': 0.0}
+        
         self._create_layout()
         self.root.update()
         self._draw_mesh()
         self._update_simulation()
+
+    def _get_phase_arrays(self):
+        """Extracts thetas and phis as JAX arrays for the pure engine functions."""
+        thetas = jnp.array([self.phases[mid]['theta'] for mid in self.engine.mzi_ids], dtype=jnp.float64)
+        phis = jnp.array([self.phases[mid]['phi'] for mid in self.engine.mzi_ids], dtype=jnp.float64)
+        return thetas, phis
 
     def _draw_mesh(self, event=None):
         """Renders the photonic mesh and classical power flow on the canvas."""
@@ -302,8 +316,8 @@ class GUI:
         # calculate power flow
         input_vec = self.input_vars
         total_p = sum(input_vec)
-        is_quantum = self.sim_mode.get() == "quantum"
-        powers_jax = self.engine.get_classical_flow(input_vec, coherent=is_quantum)
+        thetas, phis = self._get_phase_arrays()
+        powers_jax = self.engine.get_classical_flow(thetas, phis, input_vec, coherent=True)
         powers = [np.asarray(p) for p in powers_jax]
         max_p = np.max(powers) if np.max(powers) > 0 else 1.0
 
@@ -412,8 +426,8 @@ class GUI:
                         accent_col = self.colors['accent'] if is_sel else "#555"
                         
                         # get current phases
-                        curr_theta = self.engine.phases[mzi_id]['theta']
-                        curr_phi = self.engine.phases[mzi_id]['phi']
+                        curr_theta = self.phases[mzi_id]['theta']
+                        curr_phi = self.phases[mzi_id]['phi']
 
                         # draw selection ring around the crossing point
                         if is_sel:
@@ -424,7 +438,7 @@ class GUI:
                         
                         # label for theta
                         self.canvas.create_text(mid_x + 20, mid_y + 4, 
-                                                text=f"θ:{curr_theta:.2f}", 
+                                                text=f"θ:{curr_theta/jnp.pi:.2f}π", 
                                                 fill="#aaa", font=("Arial", 7), anchor="w", angle=30)
 
                         # draw phase shifter on top arm
@@ -435,7 +449,7 @@ class GUI:
                         
                         # label for phi
                         self.canvas.create_text(ps_x + 8, y_ps_linear - 12, 
-                                                text=f"φ:{curr_phi:.2f}", 
+                                                text=f"φ:{curr_phi/jnp.pi:.2f}π", 
                                                 fill="#aaa", font=("Arial", 7), anchor="w", angle=30)
                         
                         # small ID label below
@@ -478,16 +492,16 @@ class GUI:
             self.selected_mzi = closest_id
             self.lbl_selected.config(text=f"Editing MZI: {closest_id}", foreground=self.colors['accent'])
             
-            p = self.engine.phases[closest_id]
-            self.theta_var.set(p['theta'])
-            self.phi_var.set(p['phi'])
+            p = self.phases[closest_id]
+            self.theta_var.set(p['theta'] / float(jnp.pi))
+            self.phi_var.set(p['phi'] / float(jnp.pi))
             self._draw_mesh() # redraw to show selection highlight
 
     def _on_param_change(self):
         """Handles phase parameter updates and refreshes the simulation."""
         if self.selected_mzi:
-            self.engine.phases[self.selected_mzi]['theta'] = self.theta_var.get()
-            self.engine.phases[self.selected_mzi]['phi'] = self.phi_var.get()
+            self.phases[self.selected_mzi]['theta'] = self.theta_var.get() * float(jnp.pi)
+            self.phases[self.selected_mzi]['phi'] = self.phi_var.get() * float(jnp.pi)
             self._update_simulation()
 
     def _set_preset(self, t, p):
@@ -510,10 +524,10 @@ class GUI:
         
         # Set first MZI (A1) to a 50:50 beam splitter
         first_mzi = self.engine.layout[0][0]['id']
-        self.engine.phases[first_mzi]['theta'] = float(jnp.pi / 2)
+        self.phases[first_mzi]['theta'] = float(jnp.pi / 2)
         
         if self.selected_mzi == first_mzi:
-            self.theta_var.set(float(jnp.pi / 2))
+            self.theta_var.set(0.5)
             
         self._update_simulation()
 
@@ -532,14 +546,14 @@ class GUI:
             
         # Randomize all phases
         for mid in self.engine.mzi_ids:
-            t = random.uniform(0, math.pi)
-            p = random.uniform(0, 2 * math.pi)
-            self.engine.phases[mid]['theta'] = t
-            self.engine.phases[mid]['phi'] = p
+            t_pi = random.uniform(0, 1.0)
+            p_pi = random.uniform(0, 2.0)
+            self.phases[mid]['theta'] = t_pi * float(jnp.pi)
+            self.phases[mid]['phi'] = p_pi * float(jnp.pi)
             
             if self.selected_mzi == mid:
-                self.theta_var.set(t)
-                self.phi_var.set(p)
+                self.theta_var.set(t_pi)
+                self.phi_var.set(p_pi)
                 
         self._update_simulation()
 
@@ -550,11 +564,11 @@ class GUI:
             self.input_labels[i].config(text="0")
             
         for mid in self.engine.mzi_ids:
-            self.engine.phases[mid]['theta'] = float(jnp.pi)
-            self.engine.phases[mid]['phi'] = 0.0
+            self.phases[mid]['theta'] = float(jnp.pi)
+            self.phases[mid]['phi'] = 0.0
             
             if self.selected_mzi == mid:
-                self.theta_var.set(float(jnp.pi))
+                self.theta_var.set(1.0)
                 self.phi_var.set(0.0)
                 
         if update:
@@ -579,7 +593,17 @@ class GUI:
         self.ax.tick_params(axis='both', which='both', length=0) # hide ticks by default
             
         if self.sim_mode.get() == "quantum":
-            results, _ = self.engine.propagate_fock(input_vec)
+            thetas, phis = self._get_phase_arrays()
+            probs_jax, basis = self.engine.propagate_fock(thetas, phis, input_vec)
+            
+            # Convert to dict and filter small probabilities to maintain UI performance
+            results = {}
+            if len(probs_jax) > 0:
+                probs_np = np.asarray(probs_jax)
+                for i, out_state in enumerate(basis):
+                    p = float(probs_np[i])
+                    if p > 0.0001:
+                        results[out_state] = p
             
             # sort and take top 12 results
             sorted_res = sorted(results.items(), key=lambda x: x[1], reverse=True)
@@ -590,12 +614,17 @@ class GUI:
             title = "State probability"
         else:
             # Classical mode
-            powers_jax = self.engine.get_classical_flow(input_vec)
-            out_powers = np.asarray(powers_jax[-1])
+            # Coherent powers and phases
+            thetas, phis = self._get_phase_arrays()
+            U = self.engine.compute_full_unitary(thetas, phis)
+            amps_in = np.sqrt(input_vec)
+            amps_out = np.asarray(U @ amps_in)
+            out_powers = np.abs(amps_out) ** 2
+            self.phases_out = np.mod(np.angle(amps_out), 2*np.pi)
             
             labels = [f"Port {i+1}" for i in range(self.n_modes)]
             probs = out_powers.tolist()
-            title = "Output Optical Power"
+            title = "Output Optical Power & Phase"
 
         y_pos = np.arange(len(labels))
 
@@ -612,10 +641,12 @@ class GUI:
             if self.sim_mode.get() == "quantum":
                 # percentage at the end
                 self.ax.text(p + (max_p * 0.07), i, f"{p*100:.1f}%", va='center', color='white', fontsize=9, fontweight='bold')
+                # label above the bar
+                self.ax.text(0, i - 0.15, label, ha='left', va='bottom', color='white', fontsize=10, family='monospace')
             else:
                 self.ax.text(p + (max_p * 0.07), i, f"{p:.2f}", va='center', color='white', fontsize=9, fontweight='bold')
-            # label above the bar
-            self.ax.text(0, i - 0.15, label, ha='left', va='bottom', color='white', fontsize=10, family='monospace')
+                phase_val_pi = self.phases_out[i] / np.pi
+                self.ax.text(0, i - 0.15, f"{label} (φ: {phase_val_pi:.2f}π)", ha='left', va='bottom', color='white', fontsize=10, family='monospace')
 
         # final styling
         self.ax.axis('off')
