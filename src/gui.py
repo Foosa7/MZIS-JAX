@@ -65,6 +65,17 @@ class GUI:
         style.map("TButton", 
                   background=[('active', '#4d4d4d'), ('pressed', '#2d2d2d')])
         
+        # scrollbar
+        style.configure("Vertical.TScrollbar",
+                        background="#333333",
+                        troughcolor=self.colors['panel'],
+                        borderwidth=0,
+                        width=10,
+                        arrowsize=0,
+                        arrowcolor=self.colors['panel'])
+        style.map("Vertical.TScrollbar",
+                  background=[('active', '#555555'), ('pressed', '#444444')])
+        
         # separator
         style.configure("TSeparator", background=self.colors['grid_lines'])
 
@@ -96,15 +107,32 @@ class GUI:
         self.panel_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(15, 0), pady=15)
         panel_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=15)
 
-        # Mouse wheel scrolling bindings
+        # Mouse wheel / trackpad scrolling bindings
         def _on_mousewheel(event):
-            if event.num == 4 or getattr(event, 'delta', 0) > 0:
-                self.panel_canvas.yview_scroll(-1, "units")
-            elif event.num == 5 or getattr(event, 'delta', 0) < 0:
-                self.panel_canvas.yview_scroll(1, "units")
+            # Linux X11 discrete scroll buttons
+            if event.num == 4:
+                self.panel_canvas.yview_scroll(-3, "units")
+            elif event.num == 5:
+                self.panel_canvas.yview_scroll(3, "units")
+            else:
+                # Windows / macOS / trackpad smooth scroll
+                delta = getattr(event, 'delta', 0)
+                if delta:
+                    self.panel_canvas.yview_scroll(int(-delta / 60), "units")
 
-        self.panel_canvas.bind('<Enter>', lambda e: self.panel_canvas.bind_all("<MouseWheel>", _on_mousewheel) or self.panel_canvas.bind_all("<Button-4>", _on_mousewheel) or self.panel_canvas.bind_all("<Button-5>", _on_mousewheel))
-        self.panel_canvas.bind('<Leave>', lambda e: self.panel_canvas.unbind_all("<MouseWheel>") or self.panel_canvas.unbind_all("<Button-4>") or self.panel_canvas.unbind_all("<Button-5>"))
+        def _bind_scroll(event):
+            self.panel_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            self.panel_canvas.bind_all("<Button-4>", _on_mousewheel)
+            self.panel_canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_scroll(event):
+            self.panel_canvas.unbind_all("<MouseWheel>")
+            self.panel_canvas.unbind_all("<Button-4>")
+            self.panel_canvas.unbind_all("<Button-5>")
+
+        # Bind to the entire control panel so scrolling works over any child widget
+        control_panel.bind('<Enter>', _bind_scroll)
+        control_panel.bind('<Leave>', _unbind_scroll)
 
         # Chip size buttons
         ttk.Label(pad_frame, text="Chip Architecture", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
