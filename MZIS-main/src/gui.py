@@ -31,6 +31,7 @@ class GUI:
         self.engine = Engine(n_modes=self.n_modes)
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
+        self.sim_mode = tk.StringVar(value="quantum")
         
         self._setup_styles()
         self._create_layout()
@@ -113,7 +114,24 @@ class GUI:
         btn_16 = ttk.Button(size_frame, text="N=16", command=lambda: self._set_modes(16))
         btn_16.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
-        ttk.Label(pad_frame, text="Photon Inputs", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
+        ttk.Label(pad_frame, text="Simulation Mode", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
+        mode_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        mode_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.btn_q = tk.Button(mode_frame, text="Quantum", width=12, bg=self.colors['accent'], fg="black", bd=0, 
+                               font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("quantum"))
+        self.btn_q.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.btn_c = tk.Button(mode_frame, text="Classical", width=12, bg="#333", fg="white", bd=0, 
+                               font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("classical"))
+        self.btn_c.pack(side=tk.LEFT, padx=5)
+        
+        # Initialize button colors
+        if self.sim_mode.get() == "classical":
+            self.btn_q.config(bg="#333", fg="white")
+            self.btn_c.config(bg=self.colors['accent'], fg="black")
+
+        ttk.Label(pad_frame, text="Light Inputs", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
         
         input_grid = ttk.Frame(pad_frame, style="Panel.TFrame")
         input_grid.pack(fill=tk.X)
@@ -221,8 +239,26 @@ class GUI:
         self.canvas_plot = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas_plot.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
+    def _set_sim_mode(self, mode):
+        """Sets the simulation mode and updates UI."""
+        self.sim_mode.set(mode)
+        if mode == "quantum":
+            self.btn_q.config(bg=self.colors['accent'], fg="black")
+            self.btn_c.config(bg="#333", fg="white")
+        else:
+            self.btn_q.config(bg="#333", fg="white")
+            self.btn_c.config(bg=self.colors['accent'], fg="black")
+        self._on_sim_mode_change()
+
+    def _on_sim_mode_change(self):
+        """Resets inputs and switches simulation mode."""
+        for i in range(self.n_modes):
+            self.input_vars[i] = 0
+            self.input_labels[i].config(text="0")
+        self._update_simulation()
+
     def _change_input(self, idx, delta):
-        """Updates the photon input count for a specific spatial mode."""
+        """Updates the photon/power input count for a specific spatial mode."""
         new_val = max(0, self.input_vars[idx] + delta)
         self.input_vars[idx] = new_val
         self.input_labels[idx].config(text=str(new_val))
@@ -266,7 +302,8 @@ class GUI:
         # calculate power flow
         input_vec = self.input_vars
         total_p = sum(input_vec)
-        powers_jax = self.engine.get_classical_flow(input_vec)
+        is_quantum = self.sim_mode.get() == "quantum"
+        powers_jax = self.engine.get_classical_flow(input_vec, coherent=is_quantum)
         powers = [np.asarray(p) for p in powers_jax]
         max_p = np.max(powers) if np.max(powers) > 0 else 1.0
 
@@ -274,6 +311,10 @@ class GUI:
             """Maps light intensity to a color for waveguide visualization."""
             if intensity < 0.001: return self.colors['waveguide_off']
             norm = min(1.0, intensity / max_p)
+            
+            # Apply a baseline threshold to prevent black highlight for low intensity
+            norm = 0.4 + 0.6 * norm
+            
             r = int(min(255, norm * 255))
             g = int(min(255, norm * 200)) 
             b = int(min(50, norm * 50))
@@ -457,6 +498,7 @@ class GUI:
 
     def _demo_hom(self):
         """Sets up the classic Hong-Ou-Mandel interference test."""
+        self._set_sim_mode("quantum")
         # Clear all inputs and MZIs
         self._demo_clear(update=False)
         
@@ -477,6 +519,7 @@ class GUI:
 
     def _demo_random(self):
         """Sets up a random boson sampling experiment with 3 photons."""
+        self._set_sim_mode("quantum")
         import random
         # Clear
         self._demo_clear(update=False)
@@ -535,17 +578,28 @@ class GUI:
         self.ax.spines['left'].set_visible(False)
         self.ax.tick_params(axis='both', which='both', length=0) # hide ticks by default
             
-        results, _ = self.engine.propagate_fock(input_vec)
-        
-        # sort and take top 12 results
-        sorted_res = sorted(results.items(), key=lambda x: x[1], reverse=True)
-        top_res = sorted_res[:12] 
-        
-        labels = [f"|{''.join(map(str, s))}>" for s, p in top_res]
-        probs = [p for s, p in top_res]
+        if self.sim_mode.get() == "quantum":
+            results, _ = self.engine.propagate_fock(input_vec)
+            
+            # sort and take top 12 results
+            sorted_res = sorted(results.items(), key=lambda x: x[1], reverse=True)
+            top_res = sorted_res[:12] 
+            
+            labels = [f"|{''.join(map(str, s))}>" for s, p in top_res]
+            probs = [p for s, p in top_res]
+            title = "State probability"
+        else:
+            # Classical mode
+            powers_jax = self.engine.get_classical_flow(input_vec)
+            out_powers = np.asarray(powers_jax[-1])
+            
+            labels = [f"Port {i+1}" for i in range(self.n_modes)]
+            probs = out_powers.tolist()
+            title = "Output Optical Power"
+
         y_pos = np.arange(len(labels))
 
-        if not probs:
+        if not probs or sum(probs) == 0:
             self.ax.axis('off')
             self.canvas_plot.draw()
             return
@@ -555,16 +609,19 @@ class GUI:
 
         max_p = max(probs)
         for i, (p, label) in enumerate(zip(probs, labels)):
-            # percentage at the end
-            self.ax.text(p + (max_p * 0.07), i, f"{p*100:.1f}%", va='center', color='white', fontsize=9, fontweight='bold')
+            if self.sim_mode.get() == "quantum":
+                # percentage at the end
+                self.ax.text(p + (max_p * 0.07), i, f"{p*100:.1f}%", va='center', color='white', fontsize=9, fontweight='bold')
+            else:
+                self.ax.text(p + (max_p * 0.07), i, f"{p:.2f}", va='center', color='white', fontsize=9, fontweight='bold')
             # label above the bar
             self.ax.text(0, i - 0.15, label, ha='left', va='bottom', color='white', fontsize=10, family='monospace')
 
         # final styling
         self.ax.axis('off')
         self.ax.invert_yaxis()  
-        self.ax.set_ylim(11.5, -0.5) 
-        self.ax.set_title("State probability", color="white", pad=10, fontsize=12, fontweight='bold')        
-        self.ax.set_xlim(0, max_p * 1.35) 
+        self.ax.set_ylim(max(11.5, len(labels) - 0.5), -0.5) 
+        self.ax.set_title(title, color="white", pad=10, fontsize=12, fontweight='bold')        
+        self.ax.set_xlim(0, max_p * 1.35 if max_p > 0 else 1) 
         self.fig.tight_layout(pad=2)
         self.canvas_plot.draw()

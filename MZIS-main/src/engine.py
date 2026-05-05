@@ -251,7 +251,7 @@ class Engine:
                 return U_l @ T_masked, None
 
             U_layer, _ = jax.lax.scan(mzi_body, U_layer, jnp.arange(max_count))
-            return U_acc @ U_layer, None
+            return U_layer @ U_acc, None
 
         U0 = jnp.eye(n_modes, dtype=jnp.complex128)
         U_total, _ = jax.lax.scan(scan_body, U0, jnp.arange(n_cols))
@@ -273,8 +273,8 @@ class Engine:
             padded_tops.append(padded)
         col_mode_tops_padded = jnp.stack(padded_tops)
 
-        # Pad phase arrays so dynamic_slice always has room
-        pad_total = max_mzis - (self.n_mzis % max_mzis) if self.n_mzis % max_mzis != 0 else 0
+        # Pad phase arrays so dynamic_slice always has room without clamping start indices
+        pad_total = max_mzis
         thetas_padded = jnp.pad(self._thetas, (0, pad_total))
         phis_padded = jnp.pad(self._phis, (0, pad_total))
 
@@ -287,23 +287,42 @@ class Engine:
     # Classical power flow
     # ──────────────────────────────────────────────────────────────────────
 
-    def get_classical_flow(self, input_vec):
-        """Calculates power distribution across each layer for classical simulation."""
+    def get_classical_flow(self, input_powers, coherent=False):
+        """Calculates power distribution across each layer.
+        
+        If coherent=True, models coherent wave interference (used for quantum mode visual proxy).
+        If coherent=False, assumes incoherent light, so powers add linearly (classical power).
+        """
         self._sync_phases_to_arrays()
         powers = []
 
-        state = jnp.array(input_vec, dtype=jnp.complex128)
-        powers.append(jnp.abs(state) ** 2)
+        if coherent:
+            state_c = jnp.array(jnp.sqrt(jnp.array(input_powers)), dtype=jnp.complex128)
+            powers.append(jnp.abs(state_c) ** 2)
 
-        for col_idx, col_data in enumerate(self.layout):
-            start, count = self._col_slices[col_idx]
-            thetas = self._thetas[start:start + count]
-            phis = self._phis[start:start + count]
-            mode_tops = self._col_mode_tops[col_idx]
+            for col_idx, col_data in enumerate(self.layout):
+                start, count = self._col_slices[col_idx]
+                thetas = self._thetas[start:start + count]
+                phis = self._phis[start:start + count]
+                mode_tops = self._col_mode_tops[col_idx]
 
-            U_layer = self._build_layer_matrix(thetas, phis, mode_tops, self.n_modes)
-            state = U_layer @ state
-            powers.append(jnp.abs(state) ** 2)
+                U_layer = self._build_layer_matrix(thetas, phis, mode_tops, self.n_modes)
+                state_c = U_layer @ state_c
+                powers.append(jnp.abs(state_c) ** 2)
+        else:
+            state_p = jnp.array(input_powers, dtype=jnp.float64)
+            powers.append(state_p)
+
+            for col_idx, col_data in enumerate(self.layout):
+                start, count = self._col_slices[col_idx]
+                thetas = self._thetas[start:start + count]
+                phis = self._phis[start:start + count]
+                mode_tops = self._col_mode_tops[col_idx]
+
+                U_layer = self._build_layer_matrix(thetas, phis, mode_tops, self.n_modes)
+                power_trans = jnp.abs(U_layer) ** 2
+                state_p = power_trans @ state_p
+                powers.append(state_p)
 
         return powers
 
