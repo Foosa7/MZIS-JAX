@@ -6,6 +6,7 @@ import math
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from .engine import Engine
+from .routing import StateRouter
 
 class GUI:
     def __init__(self, root, n_modes=8):
@@ -32,6 +33,8 @@ class GUI:
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
+        self.pr_active = False
+        self.target_vars = [tk.DoubleVar(value=0.0) for _ in range(n_modes)]
         self.loaded_unitaries = []
         self.unitary_files = []
         self.current_unitary_idx = -1
@@ -142,12 +145,14 @@ class GUI:
         size_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         size_frame.pack(fill=tk.X, pady=(0, 15))
         
-        btn_8 = ttk.Button(size_frame, text="N=8", command=lambda: self._set_modes(8))
-        btn_8.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        btn_12 = ttk.Button(size_frame, text="N=12", command=lambda: self._set_modes(12))
-        btn_12.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        btn_16 = ttk.Button(size_frame, text="N=16", command=lambda: self._set_modes(16))
-        btn_16.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        self.size_buttons = {}
+        for n in [4, 8, 12, 16]:
+            bg = self.colors['accent'] if n == self.n_modes else "#333"
+            fg = "black" if n == self.n_modes else "white"
+            btn = tk.Button(size_frame, text=f"N={n}", bg=bg, fg=fg, bd=0,
+                            font=("Arial", 10, "bold"), command=lambda n=n: self._set_modes(n))
+            btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+            self.size_buttons[n] = btn
 
         ttk.Label(pad_frame, text="Simulation Mode", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
         mode_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
@@ -159,7 +164,11 @@ class GUI:
         
         self.btn_c = tk.Button(mode_frame, text="Classical", bg="#333", fg="white", bd=0, 
                                font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("classical"))
-        self.btn_c.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        self.btn_c.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 2))
+        
+        self.btn_pr = tk.Button(mode_frame, text="Phase Retrieval", bg="#333", fg="white", bd=0, 
+                               font=("Arial", 10, "bold"), command=self._toggle_pr_mode)
+        self.btn_pr.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 0))
         
         # Initialize button colors
         if self.sim_mode.get() == "classical":
@@ -211,8 +220,40 @@ class GUI:
 
         ttk.Separator(pad_frame, orient='horizontal').pack(fill='x', pady=20)
 
-        self.mzi_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        self.dynamic_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        self.dynamic_frame.pack(fill=tk.X)
+
+        self.target_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
+        
+        ttk.Label(self.target_frame, text="Target Outputs (Phase Retrieval)", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
+        for i in range(self.n_modes):
+            f = ttk.Frame(self.target_frame, style="Panel.TFrame")
+            f.pack(fill=tk.X, pady=2)
+            ttk.Label(f, text=f"Port {i+1}", style="Panel.TLabel", width=8).pack(side=tk.LEFT)
+            scale = tk.Scale(f, from_=0, to=1.0, variable=self.target_vars[i], orient=tk.HORIZONTAL, 
+                             bg=self.colors['panel'], fg="white", troughcolor="#111",
+                             activebackground=self.colors['accent'], highlightthickness=0, bd=0,
+                             resolution=0.01)
+            scale.pack(fill=tk.X, side=tk.LEFT, expand=True)
+        
+        btn_compute = tk.Button(self.target_frame, text="Compute Routing", bg=self.colors['accent'], fg="black",
+                                font=("Arial", 11, "bold"), bd=0, activebackground="#00cc99",
+                                command=self._on_target_change)
+        btn_compute.pack(fill=tk.X, pady=(10, 5), ipady=6)
+            
+        export_frame = ttk.Frame(self.target_frame, style="Panel.TFrame")
+        export_frame.pack(fill=tk.X, pady=(0, 5))
+        btn_export = ttk.Button(export_frame, text="Export Current Unitary", command=self._export_current_unitary)
+        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        btn_export_top3 = ttk.Button(export_frame, text="Export Top 3", command=self._export_top3_unitaries)
+        btn_export_top3.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        
+        btn_reset_pr = ttk.Button(self.target_frame, text="Reset to Identity", command=self._demo_clear)
+        btn_reset_pr.pack(fill=tk.X, pady=(0, 5))
+
+        self.mzi_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
         self.mzi_frame.pack(fill=tk.X)
+        self.target_frame.pack_forget()
         
         ttk.Label(self.mzi_frame, text="MZI Config", style="Header.TLabel").pack(anchor="w")
         self.lbl_selected = ttk.Label(self.mzi_frame, text="Select an MZI on the mesh", 
@@ -295,6 +336,11 @@ class GUI:
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         self.canvas.bind("<Configure>", self._draw_mesh)
         
+        # Keyboard shortcuts for MZI presets
+        self.root.bind("a", lambda e: self._set_preset(1.0, 0.0))   # Bar
+        self.root.bind("s", lambda e: self._set_preset(0.5, 0.0))   # 50:50
+        self.root.bind("d", lambda e: self._set_preset(0.0, 0.0))   # Cross
+        
         # Unitary cycle controls below canvas
         self.cycle_frame = ttk.Frame(mesh_area, style="Panel.TFrame")
         self.cycle_frame.pack(fill=tk.X, pady=(10, 0))
@@ -323,7 +369,7 @@ class GUI:
         plot_widget.pack(fill=tk.BOTH, expand=True)
 
     def _set_sim_mode(self, mode):
-        """Sets the simulation mode and updates UI."""
+        """Sets the simulation mode (quantum/classical) and updates UI."""
         self.sim_mode.set(mode)
         if mode == "quantum":
             self.btn_q.config(bg=self.colors['accent'], fg="black")
@@ -331,14 +377,174 @@ class GUI:
         else:
             self.btn_q.config(bg="#333", fg="white")
             self.btn_c.config(bg=self.colors['accent'], fg="black")
-        self._on_sim_mode_change()
-
-    def _on_sim_mode_change(self):
-        """Resets inputs and switches simulation mode."""
-        for i in range(self.n_modes):
-            self.input_vars[i] = 0
-            self.input_labels[i].config(text="0")
         self._update_simulation()
+    
+    def _toggle_pr_mode(self):
+        """Toggles Phase Retrieval overlay on/off."""
+        self.pr_active = not self.pr_active
+        if self.pr_active:
+            self.btn_pr.config(bg=self.colors['accent'], fg="black")
+            self.mzi_frame.pack_forget()
+            self.target_frame.pack(fill=tk.X)
+            self.target_vars[0].set(1.0)
+            for i in range(1, self.n_modes):
+                self.target_vars[i].set(0.0)
+        else:
+            self.btn_pr.config(bg="#333", fg="white")
+            self.target_frame.pack_forget()
+            self.mzi_frame.pack(fill=tk.X)
+            self._update_simulation()
+
+    def _on_target_change(self):
+        if not self.pr_active:
+            return
+            
+        P_in = np.array(self.input_vars, dtype=np.float64)
+        P_out = np.array([max(0, v.get()) for v in self.target_vars], dtype=np.float64)
+        
+        if np.sum(P_in) == 0:
+            P_in[0] = 1.0
+            
+        n_photons = int(np.sum(P_in))
+        active_inputs = np.sum(P_in > 0)
+        is_quantum = self.sim_mode.get() == "quantum"
+        
+        if is_quantum and n_photons > 0:
+            # Quantum-aware: optimize directly for Fock detection probabilities
+            from .routing import _QUANTUM_RESTARTS, _QUANTUM_ITERS
+            self.lbl_unitary.config(text=f"Quantum optimization ({n_photons} photon{'s' if n_photons > 1 else ''}, {_QUANTUM_RESTARTS}x{_QUANTUM_ITERS})...")
+            self.root.update()
+            
+            input_occ = [int(x) for x in P_in]
+            results = StateRouter.optimize_quantum_routing_vmap(
+                self.engine, input_occ, P_out
+            )
+        elif active_inputs <= 1:
+            # Classical single input: coherent field-level optimization
+            from .routing import _CLASSICAL_RESTARTS, _CLASSICAL_ITERS
+            self.lbl_unitary.config(text=f"Coherent optimization ({_CLASSICAL_RESTARTS}x{_CLASSICAL_ITERS})...")
+            self.root.update()
+            
+            psi_in = np.sqrt(P_in).astype(np.complex128)
+            norm = np.linalg.norm(psi_in)
+            if norm > 0:
+                psi_in /= norm
+            else:
+                psi_in[0] = 1.0
+                
+            psi_target = np.sqrt(P_out).astype(np.complex128)
+            norm_t = np.linalg.norm(psi_target)
+            if norm_t > 0:
+                psi_target /= norm_t
+            else:
+                psi_target[0] = 1.0
+
+            results = StateRouter.optimize_coherent_routing_vmap(self.engine, psi_in, psi_target)
+        else:
+            # Classical multi-input: incoherent power-level optimization
+            from .routing import _CLASSICAL_RESTARTS, _CLASSICAL_ITERS
+            self.lbl_unitary.config(text=f"Incoherent optimization ({_CLASSICAL_RESTARTS}x{_CLASSICAL_ITERS})...")
+            self.root.update()
+            results = StateRouter.optimize_incoherent_routing_vmap(self.engine, P_in, P_out)
+        
+        # Store all results as phase configurations (not unitaries to decompose)
+        self._pr_results = results  # Keep raw phase results for export
+        self.loaded_unitaries = []
+        self.unitary_files = []
+        
+        for i, (thetas, phis, loss) in enumerate(results):
+            U = self.engine.compute_full_unitary(thetas, phis)
+            self.loaded_unitaries.append(np.asarray(U))
+            self.unitary_files.append(f"Option {i+1} (Loss: {loss:.6f})")
+            
+        self.current_unitary_idx = 0
+        self._apply_pr_result(0)
+    
+    def _apply_pr_result(self, idx):
+        """Applies a phase retrieval result directly to the mesh (no Clements decomposition)."""
+        if not hasattr(self, '_pr_results') or not self._pr_results:
+            return
+            
+        thetas, phis, loss = self._pr_results[idx]
+        
+        # Apply phases directly to mesh
+        for i, mid in enumerate(self.engine.mzi_ids):
+            self.phases[mid]['theta'] = float(thetas[i])
+            self.phases[mid]['phi'] = float(phis[i])
+            if self.selected_mzi == mid:
+                self.theta_var.set(float(thetas[i]) / float(np.pi))
+                self.phi_var.set(float(phis[i]) / float(np.pi))
+        
+        # Compute actual output for feedback
+        thetas_arr, phis_arr = self._get_phase_arrays()
+        U = self.engine.compute_full_unitary(thetas_arr, phis_arr)
+        
+        P_in = np.array(self.input_vars, dtype=np.float64)
+        if np.sum(P_in) == 0:
+            P_in[0] = 1.0
+            
+        active_inputs = np.sum(P_in > 0)
+        if active_inputs <= 1:
+            psi_in = np.sqrt(P_in).astype(np.complex128)
+            psi_in /= np.linalg.norm(psi_in)
+            psi_out = np.asarray(U) @ psi_in
+            P_actual = np.abs(psi_out)**2
+        else:
+            power_trans = np.abs(np.asarray(U))**2
+            P_actual = power_trans @ P_in
+        
+        P_target = np.array([max(0, v.get()) for v in self.target_vars], dtype=np.float64)
+        if np.sum(P_target) > 0:
+            P_target = P_target * (np.sum(P_in) / np.sum(P_target))
+        
+        self.lbl_unitary.config(text=f"Option {idx+1}/{len(self._pr_results)} (Loss: {loss:.6f})")
+        self._update_simulation()
+
+    def _export_current_unitary(self):
+        from tkinter import filedialog, messagebox
+        import os
+        
+        thetas, phis = self._get_phase_arrays()
+        U = self.engine.compute_full_unitary(thetas, phis)
+        U_np = np.asarray(U)
+        
+        filepath = filedialog.asksaveasfilename(
+            title="Save Unitary",
+            defaultextension=".npy",
+            filetypes=[("Numpy array", "*.npy")],
+            initialfile="retrieved_unitary.npy"
+        )
+        if filepath:
+            try:
+                np.save(filepath, U_np)
+                messagebox.showinfo("Export Successful", f"Unitary saved to {os.path.basename(filepath)}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to save unitary: {e}")
+
+    def _export_top3_unitaries(self):
+        """Exports the top 3 best routing unitaries to .npy files."""
+        from tkinter import filedialog, messagebox
+        import os
+        
+        if not hasattr(self, '_pr_results') or not self._pr_results:
+            messagebox.showwarning("No Results", "Run phase retrieval first.")
+            return
+            
+        folder = filedialog.askdirectory(title="Select folder to save top 3 unitaries")
+        if not folder:
+            return
+            
+        top_n = min(3, len(self._pr_results))
+        saved = []
+        for i in range(top_n):
+            thetas, phis, loss = self._pr_results[i]
+            U = self.engine.compute_full_unitary(thetas, phis)
+            U_np = np.asarray(U)
+            fname = f"routing_unitary_rank{i+1}_loss{loss:.6f}.npy"
+            np.save(os.path.join(folder, fname), U_np)
+            saved.append(fname)
+            
+        messagebox.showinfo("Export Successful", f"Saved {top_n} unitaries:\n" + "\n".join(saved))
 
     def _on_error_change(self, event=None):
         """Updates the beamsplitter error model in the engine."""
@@ -362,7 +568,8 @@ class GUI:
         new_val = max(0, self.input_vars[idx] + delta)
         self.input_vars[idx] = new_val
         self.input_labels[idx].config(text=str(new_val))
-        self._update_simulation()
+        if not self.pr_active:
+            self._update_simulation()
 
     def _set_modes(self, n):
         """Rebuilds the entire simulation and UI for a different number of spatial modes."""
@@ -376,6 +583,8 @@ class GUI:
         self.engine = Engine(n_modes=n)
         self.selected_mzi = None
         self.input_vars = [0] * n
+        self.pr_active = False
+        self.target_vars = [tk.DoubleVar(value=0.0) for _ in range(n)]
         
         self.phases = {}
         for mid in self.engine.mzi_ids:
@@ -760,10 +969,14 @@ class GUI:
         """Loads and visualizes the currently selected unitary from the loaded list."""
         if not self.loaded_unitaries:
             return
-        U = self.loaded_unitaries[self.current_unitary_idx]
-        fname = self.unitary_files[self.current_unitary_idx]
-        self.lbl_unitary.config(text=f"Loaded: {fname} ({self.current_unitary_idx + 1} / {len(self.loaded_unitaries)})")
-        self._apply_unitary_decomposition(U, keep_inputs=True, keep_mode=True)
+        # In phase retrieval mode, apply phases directly (skip Clements)
+        if self.pr_active and hasattr(self, '_pr_results') and self._pr_results:
+            self._apply_pr_result(self.current_unitary_idx)
+        else:
+            U = self.loaded_unitaries[self.current_unitary_idx]
+            fname = self.unitary_files[self.current_unitary_idx]
+            self.lbl_unitary.config(text=f"Loaded: {fname} ({self.current_unitary_idx + 1} / {len(self.loaded_unitaries)})")
+            self._apply_unitary_decomposition(U, keep_inputs=True, keep_mode=True)
 
     def _prev_unitary(self):
         """Cycles to the previous unitary in the loaded list."""
