@@ -1,20 +1,8 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import jax.numpy as jnp
 from src.engine import Engine
 
 e = Engine(n_modes=4)
-
-thetas = jnp.full(e.n_mzis, jnp.pi)
-phis = jnp.zeros(e.n_mzis)
-
-# Set first MZI (A1) to a 50:50 beam splitter
-thetas = thetas.at[0].set(jnp.pi / 2)
-
-probs, basis = e.propagate_fock(thetas, phis, [1, 1, 0, 0])
-
-for i, b in enumerate(basis):
-    if float(probs[i]) > 0.0001:
-        print(f"{b}: {probs[i]:.4f}")
+# HOM configuration
+e.phases[e.layout[0][0]['id']]['theta'] = float(jnp.pi / 2)
+res, _ = e.propagate_fock([1, 1, 0, 0])
+print(res)
