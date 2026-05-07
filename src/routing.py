@@ -1,9 +1,11 @@
 import numpy as np
+import itertools
 import jax
 import jax.numpy as jnp
 import optax
 from scipy.stats import unitary_group
 from scipy.optimize import minimize
+from .engine import ryser_permanent, _factorial
 
 class StateRouter:
     @staticmethod
@@ -131,7 +133,7 @@ class StateRouter:
         return results
 
     @staticmethod
-    def optimize_coherent_routing_vmap(engine, psi_in, psi_target, num_restarts=1000, max_iters=200):
+    def optimize_coherent_routing_vmap(engine, psi_in, psi_target, num_restarts=100, max_iters=200):
         """
         Optimizes MZI phases so that |U @ psi_in|^2 matches |psi_target|^2.
         Works for a single coherent input state. Uses field-level simulation.
@@ -159,7 +161,7 @@ class StateRouter:
         return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)
 
     @staticmethod
-    def optimize_incoherent_routing_vmap(engine, P_in, P_target, num_restarts=1000, max_iters=200):
+    def optimize_incoherent_routing_vmap(engine, P_in, P_target, num_restarts=100, max_iters=200):
         """
         Pure JAX implementation. Runs `num_restarts` optimizations in parallel
         on the GPU, without strict boundary walls.
@@ -183,4 +185,88 @@ class StateRouter:
             P_out = power_trans @ P_in
             return jnp.mean((P_out - P_target)**2)
 
+        return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)
+
+    @staticmethod
+    def optimize_quantum_routing_vmap(engine, input_occupation, P_target_per_port, 
+                                      num_restarts=100, max_iters=150):
+        """
+        Quantum-aware optimizer. Directly optimizes MZI phases to match target
+        marginal photon detection probabilities at each output port.
+        
+        The loss function computes Fock state probabilities via Ryser permanents
+        and derives per-port marginal detection probabilities.
+        
+        Args:
+            engine: Engine instance
+            input_occupation: list of photon counts per input port, e.g. [1,1,0,...]
+            P_target_per_port: desired marginal detection probability per output port
+            num_restarts: parallel optimization restarts (reduced due to heavier cost)
+            max_iters: Adam steps per restart
+        """
+        n_modes = engine.n_modes
+        n_photons = sum(input_occupation)
+        
+        if n_photons == 0:
+            return []
+        
+        # Build input indices (repeated for boson occupation)
+        in_indices = []
+        for mode, count in enumerate(input_occupation):
+            in_indices.extend([mode] * count)
+        in_indices = jnp.array(in_indices, dtype=jnp.int32)
+        
+        # Build output Fock basis
+        basis = []
+        for p in itertools.combinations_with_replacement(range(n_modes), n_photons):
+            state = [0] * n_modes
+            for m in p:
+                state[m] += 1
+            basis.append(tuple(state))
+        
+        out_indices_list = []
+        for out_state in basis:
+            out_idx = []
+            for mode, count in enumerate(out_state):
+                out_idx.extend([mode] * count)
+            out_indices_list.append(out_idx)
+        out_indices_arr = jnp.array(out_indices_list, dtype=jnp.int32)
+        
+        # Normalization constants
+        in_factorials = jnp.array([float(_factorial(n)) for n in input_occupation])
+        norm_in = jnp.prod(in_factorials)
+        out_factorials = jnp.array([[float(_factorial(n)) for n in state] for state in basis])
+        norm_out = jnp.prod(out_factorials, axis=1)
+        
+        # Build basis-to-port mapping: for each basis state, which ports have photons
+        # We compute marginals: P(port k) = sum of probs of all states where port k has >= 1 photon
+        basis_arr = jnp.array(basis, dtype=jnp.float64)  # (n_basis, n_modes)
+        port_mask = (basis_arr >= 1).astype(jnp.float64)  # (n_basis, n_modes)
+        
+        # Target marginal probabilities
+        P_target = jnp.array(P_target_per_port, dtype=jnp.float64)
+        target_sum = jnp.sum(P_target)
+        if target_sum > 0:
+            P_target = P_target / target_sum * n_photons  # normalize to n_photons total expected
+        
+        n_mzis = len(engine.mzi_ids)
+        
+        def loss_fn(phases):
+            thetas = jnp.mod(phases[:n_mzis], 2 * jnp.pi)
+            phis = jnp.mod(phases[n_mzis:], 2 * jnp.pi)
+            U = engine.compute_full_unitary(thetas, phis)
+            
+            # Compute Fock probabilities via permanents
+            all_U_sub = U[out_indices_arr][:, :, in_indices]
+            all_perms = jax.lax.map(ryser_permanent, all_U_sub)
+            all_perm_sq = jnp.abs(all_perms) ** 2
+            all_probs = all_perm_sq / (norm_in * norm_out)
+            
+            # Compute marginal detection probabilities per port
+            # P_marginal[k] = sum of (n_k * prob) for each basis state, where n_k = occupation of port k
+            # This gives the expected photon number at each port
+            P_marginal = basis_arr.T @ all_probs  # (n_modes,)
+            
+            return jnp.mean((P_marginal - P_target)**2)
+        
         return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)

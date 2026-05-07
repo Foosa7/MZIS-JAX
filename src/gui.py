@@ -33,6 +33,7 @@ class GUI:
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
+        self.pr_active = False
         self.target_vars = [tk.DoubleVar(value=0.0) for _ in range(n_modes)]
         self.loaded_unitaries = []
         self.unitary_files = []
@@ -144,12 +145,14 @@ class GUI:
         size_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         size_frame.pack(fill=tk.X, pady=(0, 15))
         
-        btn_8 = ttk.Button(size_frame, text="N=8", command=lambda: self._set_modes(8))
-        btn_8.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        btn_12 = ttk.Button(size_frame, text="N=12", command=lambda: self._set_modes(12))
-        btn_12.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        btn_16 = ttk.Button(size_frame, text="N=16", command=lambda: self._set_modes(16))
-        btn_16.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        self.size_buttons = {}
+        for n in [4, 8, 12, 16]:
+            bg = self.colors['accent'] if n == self.n_modes else "#333"
+            fg = "black" if n == self.n_modes else "white"
+            btn = tk.Button(size_frame, text=f"N={n}", bg=bg, fg=fg, bd=0,
+                            font=("Arial", 10, "bold"), command=lambda n=n: self._set_modes(n))
+            btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+            self.size_buttons[n] = btn
 
         ttk.Label(pad_frame, text="Simulation Mode", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
         mode_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
@@ -164,7 +167,7 @@ class GUI:
         self.btn_c.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 2))
         
         self.btn_pr = tk.Button(mode_frame, text="Phase Retrieval", bg="#333", fg="white", bd=0, 
-                               font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("phase_retrieval"))
+                               font=("Arial", 10, "bold"), command=self._toggle_pr_mode)
         self.btn_pr.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 0))
         
         # Initialize button colors
@@ -361,45 +364,35 @@ class GUI:
         plot_widget.pack(fill=tk.BOTH, expand=True)
 
     def _set_sim_mode(self, mode):
-        """Sets the simulation mode and updates UI."""
+        """Sets the simulation mode (quantum/classical) and updates UI."""
         self.sim_mode.set(mode)
         if mode == "quantum":
             self.btn_q.config(bg=self.colors['accent'], fg="black")
             self.btn_c.config(bg="#333", fg="white")
-            self.btn_pr.config(bg="#333", fg="white")
-            self.target_frame.pack_forget()
-            self.mzi_frame.pack(fill=tk.X)
-        elif mode == "classical":
-            self.btn_q.config(bg="#333", fg="white")
-            self.btn_c.config(bg=self.colors['accent'], fg="black")
-            self.btn_pr.config(bg="#333", fg="white")
-            self.target_frame.pack_forget()
-            self.mzi_frame.pack(fill=tk.X)
         else:
             self.btn_q.config(bg="#333", fg="white")
-            self.btn_c.config(bg="#333", fg="white")
+            self.btn_c.config(bg=self.colors['accent'], fg="black")
+        self._update_simulation()
+    
+    def _toggle_pr_mode(self):
+        """Toggles Phase Retrieval overlay on/off."""
+        self.pr_active = not self.pr_active
+        if self.pr_active:
             self.btn_pr.config(bg=self.colors['accent'], fg="black")
             self.mzi_frame.pack_forget()
             self.target_frame.pack(fill=tk.X)
-            
-        self._on_sim_mode_change()
-
-    def _on_sim_mode_change(self):
-        """Resets inputs and switches simulation mode."""
-        for i in range(self.n_modes):
-            self.input_vars[i] = 0
-            self.input_labels[i].config(text="0")
-            
-        if self.sim_mode.get() == "phase_retrieval":
             self.target_vars[0].set(1.0)
             for i in range(1, self.n_modes):
                 self.target_vars[i].set(0.0)
             self.lbl_retrieval_status.config(text="Set sliders and click Compute Routing.")
         else:
+            self.btn_pr.config(bg="#333", fg="white")
+            self.target_frame.pack_forget()
+            self.mzi_frame.pack(fill=tk.X)
             self._update_simulation()
 
     def _on_target_change(self):
-        if self.sim_mode.get() != "phase_retrieval":
+        if not self.pr_active:
             return
             
         P_in = np.array(self.input_vars, dtype=np.float64)
@@ -408,13 +401,24 @@ class GUI:
         if np.sum(P_in) == 0:
             P_in[0] = 1.0
             
+        n_photons = int(np.sum(P_in))
         active_inputs = np.sum(P_in > 0)
+        is_quantum = self.sim_mode.get() == "quantum"
         
-        self.lbl_unitary.config(text=f"Optimizing {'coherent' if active_inputs <= 1 else 'incoherent'} routing (1000 restarts)...")
-        self.root.update()
-        
-        if active_inputs <= 1:
-            # Single input: coherent field-level optimization
+        if is_quantum and n_photons > 0:
+            # Quantum-aware: optimize directly for Fock detection probabilities
+            self.lbl_unitary.config(text=f"Quantum optimization ({n_photons} photon{'s' if n_photons > 1 else ''}, 100 restarts)...")
+            self.root.update()
+            
+            input_occ = [int(x) for x in P_in]
+            results = StateRouter.optimize_quantum_routing_vmap(
+                self.engine, input_occ, P_out, num_restarts=100, max_iters=150
+            )
+        elif active_inputs <= 1:
+            # Classical single input: coherent field-level optimization
+            self.lbl_unitary.config(text="Optimizing coherent routing (1000 restarts)...")
+            self.root.update()
+            
             psi_in = np.sqrt(P_in).astype(np.complex128)
             norm = np.linalg.norm(psi_in)
             if norm > 0:
@@ -431,7 +435,9 @@ class GUI:
 
             results = StateRouter.optimize_coherent_routing_vmap(self.engine, psi_in, psi_target)
         else:
-            # Multi-input: incoherent power-level optimization
+            # Classical multi-input: incoherent power-level optimization
+            self.lbl_unitary.config(text="Optimizing incoherent routing (1000 restarts)...")
+            self.root.update()
             results = StateRouter.optimize_incoherent_routing_vmap(self.engine, P_in, P_out)
         
         # Store all results as phase configurations (not unitaries to decompose)
@@ -563,7 +569,7 @@ class GUI:
         new_val = max(0, self.input_vars[idx] + delta)
         self.input_vars[idx] = new_val
         self.input_labels[idx].config(text=str(new_val))
-        if self.sim_mode.get() != "phase_retrieval":
+        if not self.pr_active:
             self._update_simulation()
 
     def _set_modes(self, n):
@@ -578,6 +584,7 @@ class GUI:
         self.engine = Engine(n_modes=n)
         self.selected_mzi = None
         self.input_vars = [0] * n
+        self.pr_active = False
         self.target_vars = [tk.DoubleVar(value=0.0) for _ in range(n)]
         
         self.phases = {}
@@ -964,7 +971,7 @@ class GUI:
         if not self.loaded_unitaries:
             return
         # In phase retrieval mode, apply phases directly (skip Clements)
-        if self.sim_mode.get() == "phase_retrieval" and hasattr(self, '_pr_results') and self._pr_results:
+        if self.pr_active and hasattr(self, '_pr_results') and self._pr_results:
             self._apply_pr_result(self.current_unitary_idx)
         else:
             U = self.loaded_unitaries[self.current_unitary_idx]
