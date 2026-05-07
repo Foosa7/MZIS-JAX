@@ -232,6 +232,9 @@ class GUI:
                              activebackground=self.colors['accent'], highlightthickness=0, bd=0,
                              resolution=0.01, command=lambda x, idx=i: self._on_target_change())
             scale.pack(fill=tk.X, side=tk.LEFT, expand=True)
+            
+        btn_export = ttk.Button(self.target_frame, text="Export Target Unitary", command=self._export_current_unitary)
+        btn_export.pack(fill=tk.X, pady=(10, 5))
 
         self.mzi_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
         self.mzi_frame.pack(fill=tk.X)
@@ -385,24 +388,69 @@ class GUI:
 
     def _on_target_change(self):
         if self.sim_mode.get() == "phase_retrieval":
-            psi_in = np.zeros(self.n_modes, dtype=np.complex128)
-            for i in range(self.n_modes):
-                psi_in[i] = np.sqrt(self.input_vars[i])
-            if np.linalg.norm(psi_in) == 0:
-                psi_in[0] = 1.0
-
-            psi_in /= np.linalg.norm(psi_in)
+            P_in = np.array(self.input_vars, dtype=np.float64)
+            P_out = np.array([max(0, v.get()) for v in self.target_vars], dtype=np.float64)
             
-            psi_out = np.zeros(self.n_modes, dtype=np.complex128)
-            for i in range(self.n_modes):
-                psi_out[i] = np.sqrt(max(0, self.target_vars[i].get()))
-            if np.linalg.norm(psi_out) == 0:
-                psi_out[0] = 1.0
-
-            psi_out /= np.linalg.norm(psi_out)
+            if np.sum(P_in) == 0:
+                P_in[0] = 1.0
+                
+            active_inputs = np.sum(P_in > 0)
             
-            unitaries = StateRouter.generate_routing_unitaries(psi_in, psi_out, num_unitaries=1)
-            self._apply_unitary_decomposition(unitaries[0], keep_inputs=True, keep_mode=True)
+            if active_inputs <= 1:
+                # Analytical coherent routing (exact)
+                psi_in = np.sqrt(P_in)
+                psi_in /= np.linalg.norm(psi_in)
+                
+                psi_out = np.sqrt(P_out)
+                if np.linalg.norm(psi_out) > 0:
+                    psi_out /= np.linalg.norm(psi_out)
+                else:
+                    psi_out[0] = 1.0
+                    
+                unitaries = StateRouter.generate_routing_unitaries(psi_in, psi_out, num_unitaries=10)
+                
+                self.loaded_unitaries = unitaries
+                self.unitary_files = [f"Analytical Option {i+1}" for i in range(len(unitaries))]
+                self.current_unitary_idx = 0
+                self._load_unitary_from_list()
+            else:
+                # Robust incoherent numerical routing (vmap)
+                self.lbl_unitary.config(text="Optimizing incoherent routing (1000 restarts)...")
+                self.root.update()
+                
+                results = StateRouter.optimize_incoherent_routing_vmap(self.engine, P_in, P_out)
+                
+                self.loaded_unitaries = []
+                self.unitary_files = []
+                
+                for i, (thetas, phis, loss) in enumerate(results):
+                    U = self.engine.compute_full_unitary(thetas, phis)
+                    self.loaded_unitaries.append(np.asarray(U))
+                    self.unitary_files.append(f"Opt {i+1} (Loss: {float(loss):.4f})")
+                    
+                self.current_unitary_idx = 0
+                self._load_unitary_from_list()
+
+    def _export_current_unitary(self):
+        from tkinter import filedialog, messagebox
+        import os
+        
+        thetas, phis = self._get_phase_arrays()
+        U = self.engine.compute_full_unitary(thetas, phis)
+        U_np = np.asarray(U)
+        
+        filepath = filedialog.asksaveasfilename(
+            title="Save Unitary",
+            defaultextension=".npy",
+            filetypes=[("Numpy array", "*.npy")],
+            initialfile="retrieved_unitary.npy"
+        )
+        if filepath:
+            try:
+                np.save(filepath, U_np)
+                messagebox.showinfo("Export Successful", f"Unitary saved to {os.path.basename(filepath)}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to save unitary: {e}")
 
     def _on_error_change(self, event=None):
         """Updates the beamsplitter error model in the engine."""
