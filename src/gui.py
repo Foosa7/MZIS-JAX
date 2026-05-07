@@ -6,6 +6,7 @@ import math
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from .engine import Engine
+from .routing import StateRouter
 
 class GUI:
     def __init__(self, root, n_modes=8):
@@ -32,6 +33,7 @@ class GUI:
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
+        self.target_vars = [tk.DoubleVar(value=0.0) for _ in range(n_modes)]
         self.loaded_unitaries = []
         self.unitary_files = []
         self.current_unitary_idx = -1
@@ -159,7 +161,11 @@ class GUI:
         
         self.btn_c = tk.Button(mode_frame, text="Classical", bg="#333", fg="white", bd=0, 
                                font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("classical"))
-        self.btn_c.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        self.btn_c.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 2))
+        
+        self.btn_pr = tk.Button(mode_frame, text="Phase Retrieval", bg="#333", fg="white", bd=0, 
+                               font=("Arial", 10, "bold"), command=lambda: self._set_sim_mode("phase_retrieval"))
+        self.btn_pr.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 0))
         
         # Initialize button colors
         if self.sim_mode.get() == "classical":
@@ -211,8 +217,25 @@ class GUI:
 
         ttk.Separator(pad_frame, orient='horizontal').pack(fill='x', pady=20)
 
-        self.mzi_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        self.dynamic_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        self.dynamic_frame.pack(fill=tk.X)
+
+        self.target_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
+        
+        ttk.Label(self.target_frame, text="Target Outputs (Phase Retrieval)", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
+        for i in range(self.n_modes):
+            f = ttk.Frame(self.target_frame, style="Panel.TFrame")
+            f.pack(fill=tk.X, pady=2)
+            ttk.Label(f, text=f"Port {i+1}", style="Panel.TLabel", width=8).pack(side=tk.LEFT)
+            scale = tk.Scale(f, from_=0, to=1.0, variable=self.target_vars[i], orient=tk.HORIZONTAL, 
+                             bg=self.colors['panel'], fg="white", troughcolor="#111",
+                             activebackground=self.colors['accent'], highlightthickness=0, bd=0,
+                             resolution=0.01, command=lambda x, idx=i: self._on_target_change())
+            scale.pack(fill=tk.X, side=tk.LEFT, expand=True)
+
+        self.mzi_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
         self.mzi_frame.pack(fill=tk.X)
+        self.target_frame.pack_forget()
         
         ttk.Label(self.mzi_frame, text="MZI Config", style="Header.TLabel").pack(anchor="w")
         self.lbl_selected = ttk.Label(self.mzi_frame, text="Select an MZI on the mesh", 
@@ -328,9 +351,22 @@ class GUI:
         if mode == "quantum":
             self.btn_q.config(bg=self.colors['accent'], fg="black")
             self.btn_c.config(bg="#333", fg="white")
-        else:
+            self.btn_pr.config(bg="#333", fg="white")
+            self.target_frame.pack_forget()
+            self.mzi_frame.pack(fill=tk.X)
+        elif mode == "classical":
             self.btn_q.config(bg="#333", fg="white")
             self.btn_c.config(bg=self.colors['accent'], fg="black")
+            self.btn_pr.config(bg="#333", fg="white")
+            self.target_frame.pack_forget()
+            self.mzi_frame.pack(fill=tk.X)
+        else:
+            self.btn_q.config(bg="#333", fg="white")
+            self.btn_c.config(bg="#333", fg="white")
+            self.btn_pr.config(bg=self.colors['accent'], fg="black")
+            self.mzi_frame.pack_forget()
+            self.target_frame.pack(fill=tk.X)
+            
         self._on_sim_mode_change()
 
     def _on_sim_mode_change(self):
@@ -338,7 +374,35 @@ class GUI:
         for i in range(self.n_modes):
             self.input_vars[i] = 0
             self.input_labels[i].config(text="0")
-        self._update_simulation()
+            
+        if self.sim_mode.get() == "phase_retrieval":
+            self.target_vars[0].set(1.0)
+            for i in range(1, self.n_modes):
+                self.target_vars[i].set(0.0)
+            self._on_target_change()
+        else:
+            self._update_simulation()
+
+    def _on_target_change(self):
+        if self.sim_mode.get() == "phase_retrieval":
+            psi_in = np.zeros(self.n_modes, dtype=np.complex128)
+            for i in range(self.n_modes):
+                psi_in[i] = np.sqrt(self.input_vars[i])
+            if np.linalg.norm(psi_in) == 0:
+                psi_in[0] = 1.0
+
+            psi_in /= np.linalg.norm(psi_in)
+            
+            psi_out = np.zeros(self.n_modes, dtype=np.complex128)
+            for i in range(self.n_modes):
+                psi_out[i] = np.sqrt(max(0, self.target_vars[i].get()))
+            if np.linalg.norm(psi_out) == 0:
+                psi_out[0] = 1.0
+
+            psi_out /= np.linalg.norm(psi_out)
+            
+            unitaries = StateRouter.generate_routing_unitaries(psi_in, psi_out, num_unitaries=1)
+            self._apply_unitary_decomposition(unitaries[0], keep_inputs=True, keep_mode=True)
 
     def _on_error_change(self, event=None):
         """Updates the beamsplitter error model in the engine."""
@@ -362,7 +426,10 @@ class GUI:
         new_val = max(0, self.input_vars[idx] + delta)
         self.input_vars[idx] = new_val
         self.input_labels[idx].config(text=str(new_val))
-        self._update_simulation()
+        if self.sim_mode.get() == "phase_retrieval":
+            self._on_target_change()
+        else:
+            self._update_simulation()
 
     def _set_modes(self, n):
         """Rebuilds the entire simulation and UI for a different number of spatial modes."""
@@ -376,6 +443,7 @@ class GUI:
         self.engine = Engine(n_modes=n)
         self.selected_mzi = None
         self.input_vars = [0] * n
+        self.target_vars = [tk.DoubleVar(value=0.0) for _ in range(n)]
         
         self.phases = {}
         for mid in self.engine.mzi_ids:
