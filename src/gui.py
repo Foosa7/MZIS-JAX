@@ -28,7 +28,7 @@ class GUI:
         
         self.root.configure(bg=self.colors['bg'])
 
-        self.engine = Engine(n_modes=self.n_modes)
+        self.engine = Engine(n_modes=self.n_modes, bs_error=0.0)
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
@@ -163,6 +163,20 @@ class GUI:
             self.btn_q.config(bg="#333", fg="white")
             self.btn_c.config(bg=self.colors['accent'], fg="black")
 
+        # Hardware Errors
+        ttk.Label(pad_frame, text="Hardware Imperfections", style="Header.TLabel").pack(anchor="w", pady=(15, 5))
+        hw_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        hw_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.error_mode = tk.StringVar(value="Ideal (No Error)")
+        self.error_dropdown = tk.OptionMenu(hw_frame, self.error_mode, 
+                                            "Ideal (No Error)", "Basic Loss (15%)", "Calibration Data",
+                                            command=self._on_error_change)
+        self.error_dropdown.config(bg="#333", fg="white", activebackground="#444", activeforeground="white",
+                                   bd=0, highlightthickness=0, font=("Arial", 10, "bold"))
+        self.error_dropdown["menu"].config(bg="#333", fg="white", activebackground=self.colors['accent'], activeforeground="black", font=("Arial", 10))
+        self.error_dropdown.pack(fill=tk.X, pady=5)
+
         ttk.Label(pad_frame, text="Light Inputs", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
         
         input_grid = ttk.Frame(pad_frame, style="Panel.TFrame")
@@ -281,7 +295,9 @@ class GUI:
         self.ax.set_facecolor(self.colors['bg'])
         
         self.canvas_plot = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
-        self.canvas_plot.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        plot_widget = self.canvas_plot.get_tk_widget()
+        plot_widget.configure(bg=self.colors['bg'], highlightthickness=0)
+        plot_widget.pack(fill=tk.BOTH, expand=True)
 
     def _set_sim_mode(self, mode):
         """Sets the simulation mode and updates UI."""
@@ -299,6 +315,23 @@ class GUI:
         for i in range(self.n_modes):
             self.input_vars[i] = 0
             self.input_labels[i].config(text="0")
+        self._update_simulation()
+
+    def _on_error_change(self, event=None):
+        """Updates the beamsplitter error model in the engine."""
+        mode = self.error_mode.get()
+        if mode == "Ideal (No Error)":
+            self.engine.set_bs_error(0.0)
+        elif mode == "Basic Loss (15%)":
+            self.engine.set_bs_error(0.15)
+        elif mode == "Calibration Data":
+            import os
+            json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'node-isolation', '8-mode-autocal-20260209.json'))
+            if os.path.exists(json_path):
+                self.engine.load_calibration_errors(json_path, default_e=0.0)
+            else:
+                print("Warning: Calibration JSON not found.")
+                self.engine.set_bs_error(0.0)
         self._update_simulation()
 
     def _change_input(self, idx, delta):
@@ -326,6 +359,7 @@ class GUI:
             self.phases[mid] = {'theta': float(jnp.pi), 'phi': 0.0}
         
         self._create_layout()
+        self._on_error_change() # Reapply selected error mode
         self.root.update()
         self._draw_mesh()
         self._update_simulation()
