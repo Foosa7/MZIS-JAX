@@ -32,6 +32,9 @@ class GUI:
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
+        self.loaded_unitaries = []
+        self.unitary_files = []
+        self.current_unitary_idx = -1
         
         self.phases = {}
         for mid in self.engine.mzi_ids:
@@ -273,17 +276,37 @@ class GUI:
         btn_import = ttk.Button(self.demo_frame, text="Import Unitary", command=self._import_unitary_decomposition)
         btn_import.pack(fill=tk.X, pady=2)
         
+        btn_import_folder = ttk.Button(self.demo_frame, text="Import Unitary Folder", command=self._import_unitary_folder)
+        btn_import_folder.pack(fill=tk.X, pady=2)
+        
         btn_clear = ttk.Button(self.demo_frame, text="Reset to Identity", command=self._demo_clear)
         btn_clear.pack(fill=tk.X, pady=2)
 
         center_area = ttk.Frame(self.main_container, style="TFrame")
         center_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        # mesh area container
+        mesh_area = ttk.Frame(center_area, style="TFrame")
+        mesh_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=20)
+
         # mesh canvas 
-        self.canvas = tk.Canvas(center_area, bg=self.colors['bg'], highlightthickness=0)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=20)
+        self.canvas = tk.Canvas(mesh_area, bg=self.colors['bg'], highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         self.canvas.bind("<Configure>", self._draw_mesh)
+        
+        # Unitary cycle controls below canvas
+        self.cycle_frame = ttk.Frame(mesh_area, style="Panel.TFrame")
+        self.cycle_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        btn_prev = ttk.Button(self.cycle_frame, text="< Prev", command=self._prev_unitary)
+        btn_prev.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        self.lbl_unitary = ttk.Label(self.cycle_frame, text="No unitaries loaded", style="Panel.TLabel", anchor="center")
+        self.lbl_unitary.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5, pady=5)
+        
+        btn_next = ttk.Button(self.cycle_frame, text="Next >", command=self._next_unitary)
+        btn_next.pack(side=tk.RIGHT, padx=5, pady=5)
 
         # graph 
         self.plot_frame = ttk.Frame(center_area, width=350, style="TFrame")
@@ -391,7 +414,9 @@ class GUI:
         input_vec = self.input_vars
         total_p = sum(input_vec)
         thetas, phis = self._get_phase_arrays()
-        powers_jax = self.engine.get_classical_flow(thetas, phis, input_vec, coherent=True)
+        
+        is_coherent = (self.sim_mode.get() == "quantum")
+        powers_jax = self.engine.get_classical_flow(thetas, phis, input_vec, coherent=is_coherent)
         powers = [np.asarray(p) for p in powers_jax]
         max_p = np.max(powers) if np.max(powers) > 0 else 1.0
 
@@ -680,9 +705,86 @@ class GUI:
             from tkinter import messagebox
             messagebox.showerror("Import Error", f"Failed to load unitary:\n{e}")
 
-    def _apply_unitary_decomposition(self, U_target):
+    def _import_unitary_folder(self):
+        """Opens a file dialog to import a folder containing unitary matrices."""
+        from tkinter import filedialog
+        import os
+        folderpath = filedialog.askdirectory(title="Select Folder containing Unitaries")
+        if not folderpath:
+            return
+            
+        try:
+            files = sorted([os.path.join(folderpath, f) for f in os.listdir(folderpath) if os.path.isfile(os.path.join(folderpath, f))])
+            unitaries = []
+            valid_files = []
+            for f in files:
+                try:
+                    if f.endswith('.npy'):
+                        U = np.load(f)
+                    elif f.endswith('.npz'):
+                        U_loaded = np.load(f)
+                        U = U_loaded[U_loaded.files[0]]
+                    elif f.endswith('.txt') or f.endswith('.csv'):
+                        U = np.loadtxt(f, dtype=np.complex128)
+                    else:
+                        try:
+                            U = np.load(f)
+                        except:
+                            U = np.loadtxt(f, dtype=np.complex128)
+                            
+                    if len(U.shape) == 2 and U.shape[0] == U.shape[1]:
+                        unitaries.append(U)
+                        valid_files.append(os.path.basename(f))
+                except:
+                    continue
+                    
+            if not unitaries:
+                from tkinter import messagebox
+                messagebox.showerror("Import Error", "No valid unitary matrices found in folder.")
+                return
+                
+            self.loaded_unitaries = unitaries
+            self.unitary_files = valid_files
+            self.current_unitary_idx = 0
+            
+            if unitaries[0].shape[0] != self.n_modes:
+                self._set_modes(unitaries[0].shape[0])
+                
+            self._load_unitary_from_list()
+            
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Import Error", f"Failed to load folder:\n{e}")
+
+    def _load_unitary_from_list(self):
+        """Loads and visualizes the currently selected unitary from the loaded list."""
+        if not self.loaded_unitaries:
+            return
+        U = self.loaded_unitaries[self.current_unitary_idx]
+        fname = self.unitary_files[self.current_unitary_idx]
+        self.lbl_unitary.config(text=f"Loaded: {fname} ({self.current_unitary_idx + 1} / {len(self.loaded_unitaries)})")
+        self._apply_unitary_decomposition(U, keep_inputs=True, keep_mode=True)
+
+    def _prev_unitary(self):
+        """Cycles to the previous unitary in the loaded list."""
+        if self.loaded_unitaries:
+            self.current_unitary_idx = (self.current_unitary_idx - 1) % len(self.loaded_unitaries)
+            self._load_unitary_from_list()
+            
+    def _next_unitary(self):
+        """Cycles to the next unitary in the loaded list."""
+        if self.loaded_unitaries:
+            self.current_unitary_idx = (self.current_unitary_idx + 1) % len(self.loaded_unitaries)
+            self._load_unitary_from_list()
+
+    def _apply_unitary_decomposition(self, U_target, keep_inputs=False, keep_mode=False):
         """Decomposes a given unitary matrix and assigns the phases to the mesh."""
-        self._set_sim_mode("classical")
+        if keep_inputs:
+            saved_inputs = list(self.input_vars)
+            
+        if not keep_mode:
+            self._set_sim_mode("classical")
+            
         self._demo_clear(update=False)
         
         try:
@@ -713,9 +815,14 @@ class GUI:
                         self.theta_var.set(theta_val / float(jnp.pi))
                         self.phi_var.set(phi_val / float(jnp.pi))
                         
-            # Set classical input to port 1 so we can see the routing
-            self.input_vars[0] = 1
-            self.input_labels[0].config(text="1")
+            if keep_inputs:
+                for i in range(self.n_modes):
+                    self.input_vars[i] = saved_inputs[i]
+                    self.input_labels[i].config(text=str(saved_inputs[i]))
+            else:
+                # Set classical input to port 1 so we can see the routing
+                self.input_vars[0] = 1
+                self.input_labels[0].config(text="1")
             
             self._update_simulation()
             
@@ -779,13 +886,13 @@ class GUI:
             title = "State probability"
         else:
             # Classical mode
-            # Coherent powers and phases
+            # Incoherent power tracking for independent classical sources
             thetas, phis = self._get_phase_arrays()
             U = self.engine.compute_full_unitary(thetas, phis)
-            amps_in = np.sqrt(input_vec)
-            amps_out = np.asarray(U @ amps_in)
-            out_powers = np.abs(amps_out) ** 2
-            self.phases_out = np.mod(np.angle(amps_out), 2*np.pi)
+            power_trans = np.abs(U) ** 2
+            input_p = np.array(input_vec, dtype=np.float64)
+            out_powers = power_trans @ input_p
+            self.phases_out = np.zeros(self.n_modes)
             
             labels = [f"Port {i+1}" for i in range(self.n_modes)]
             probs = out_powers.tolist()
@@ -809,7 +916,7 @@ class GUI:
                 # label above the bar
                 self.ax.text(0, i - 0.15, label, ha='left', va='bottom', color='white', fontsize=10, family='monospace')
             else:
-                self.ax.text(p + (max_p * 0.07), i, f"{p:.2f}", va='center', color='white', fontsize=9, fontweight='bold')
+                self.ax.text(p + (max_p * 0.07), i, f"{p:.5f}", va='center', color='white', fontsize=9, fontweight='bold')
                 phase_val_pi = self.phases_out[i] / np.pi
                 self.ax.text(0, i - 0.15, f"{label} (φ: {phase_val_pi:.2f}π)", ha='left', va='bottom', color='white', fontsize=10, family='monospace')
 
