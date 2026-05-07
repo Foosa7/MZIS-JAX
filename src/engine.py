@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from jax import jit
 from functools import partial
 import itertools
+import json
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Vectorized Ryser Permanent
@@ -74,15 +75,7 @@ class Engine:
         self._id_to_idx = {mid: i for i, mid in enumerate(self.mzi_ids)}
         
         # Initialize error arrays
-        if isinstance(self.bs_error, float) or isinstance(self.bs_error, int):
-            self.e_l = jnp.ones(self.n_mzis) * self.bs_error
-            self.e_r = jnp.ones(self.n_mzis) * self.bs_error
-        elif isinstance(self.bs_error, tuple):
-            self.e_l = jnp.asarray(self.bs_error[0])
-            self.e_r = jnp.asarray(self.bs_error[1])
-        else:
-            self.e_l = jnp.asarray(self.bs_error)
-            self.e_r = self.e_l
+        self.set_bs_error(self.bs_error)
 
         # Precompute column boundaries: list of (start_idx, count) into the flat arrays
         self._col_slices = []
@@ -125,6 +118,55 @@ class Engine:
                 col_mzis.append({'id': mzi_id, 'mode_top': start_mode + 2*k})
             cols.append(col_mzis)
         return cols
+
+    def set_bs_error(self, bs_error):
+        """Sets the global beamsplitter error and updates the internal arrays."""
+        self.bs_error = bs_error
+        if isinstance(bs_error, float) or isinstance(bs_error, int):
+            self.e_l = jnp.ones(self.n_mzis) * bs_error
+            self.e_r = jnp.ones(self.n_mzis) * bs_error
+        elif isinstance(bs_error, tuple):
+            self.e_l = jnp.asarray(bs_error[0])
+            self.e_r = jnp.asarray(bs_error[1])
+        else:
+            self.e_l = jnp.asarray(bs_error)
+            self.e_r = self.e_l
+
+    def load_calibration_errors(self, json_path, default_e=0.0):
+        """
+        Loads empirical beamsplitter errors from a node-isolation calibration JSON.
+        Calculates beamsplitter error from fringe visibility.
+        """
+        try:
+            with open(json_path, 'r') as f:
+                cal_data = json.load(f)
+        except Exception as e:
+            print(f"Failed to load calibration data: {e}")
+            self.set_bs_error(default_e)
+            return
+
+        e_l_list = []
+        e_r_list = []
+        for mid in self.mzi_ids:
+            key = f"{mid}_theta"
+            e = default_e
+            if 'phase_calibration' in cal_data and key in cal_data['phase_calibration']:
+                params = cal_data['phase_calibration'][key].get('phase_params', {})
+                A = params.get('amplitude', 0.0)
+                C = params.get('offset', 1.0)
+                
+                # Protect against division by zero or negative sqrt
+                if C + A > 0:
+                    # Visibility V = A/C. e^2 = (1-V)/(1+V) = (C-A)/(C+A)
+                    e_sq = (C - A) / (C + A)
+                    e = float(jnp.sqrt(jnp.maximum(0.0, float(e_sq))))
+            
+            e_l_list.append(e)
+            e_r_list.append(e)
+            
+        self.e_l = jnp.array(e_l_list)
+        self.e_r = jnp.array(e_r_list)
+        self.bs_error = (self.e_l, self.e_r)
 
     # ──────────────────────────────────────────────────────────────────────
     # Layer and full unitary construction (JAX-native)
