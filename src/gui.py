@@ -230,11 +230,23 @@ class GUI:
             scale = tk.Scale(f, from_=0, to=1.0, variable=self.target_vars[i], orient=tk.HORIZONTAL, 
                              bg=self.colors['panel'], fg="white", troughcolor="#111",
                              activebackground=self.colors['accent'], highlightthickness=0, bd=0,
-                             resolution=0.01, command=lambda x, idx=i: self._on_target_change())
+                             resolution=0.01)
             scale.pack(fill=tk.X, side=tk.LEFT, expand=True)
+        
+        btn_compute = tk.Button(self.target_frame, text="⚡ Compute Routing", bg=self.colors['accent'], fg="black",
+                                font=("Arial", 11, "bold"), bd=0, activebackground="#00cc99",
+                                command=self._on_target_change)
+        btn_compute.pack(fill=tk.X, pady=(10, 5), ipady=6)
             
-        btn_export = ttk.Button(self.target_frame, text="Export Target Unitary", command=self._export_current_unitary)
-        btn_export.pack(fill=tk.X, pady=(10, 5))
+        export_frame = ttk.Frame(self.target_frame, style="Panel.TFrame")
+        export_frame.pack(fill=tk.X, pady=(0, 5))
+        btn_export = ttk.Button(export_frame, text="Export Current Unitary", command=self._export_current_unitary)
+        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        btn_export_top3 = ttk.Button(export_frame, text="Export Top 3", command=self._export_top3_unitaries)
+        btn_export_top3.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        
+        self.lbl_retrieval_status = ttk.Label(self.target_frame, text="", style="Panel.TLabel", wraplength=280)
+        self.lbl_retrieval_status.pack(anchor="w", pady=(5, 0))
 
         self.mzi_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
         self.mzi_frame.pack(fill=tk.X)
@@ -382,54 +394,106 @@ class GUI:
             self.target_vars[0].set(1.0)
             for i in range(1, self.n_modes):
                 self.target_vars[i].set(0.0)
-            self._on_target_change()
+            self.lbl_retrieval_status.config(text="Set sliders and click Compute Routing.")
         else:
             self._update_simulation()
 
     def _on_target_change(self):
-        if self.sim_mode.get() == "phase_retrieval":
-            P_in = np.array(self.input_vars, dtype=np.float64)
-            P_out = np.array([max(0, v.get()) for v in self.target_vars], dtype=np.float64)
+        if self.sim_mode.get() != "phase_retrieval":
+            return
             
-            if np.sum(P_in) == 0:
-                P_in[0] = 1.0
-                
-            active_inputs = np.sum(P_in > 0)
+        P_in = np.array(self.input_vars, dtype=np.float64)
+        P_out = np.array([max(0, v.get()) for v in self.target_vars], dtype=np.float64)
+        
+        if np.sum(P_in) == 0:
+            P_in[0] = 1.0
             
-            if active_inputs <= 1:
-                # Analytical coherent routing (exact)
-                psi_in = np.sqrt(P_in)
-                psi_in /= np.linalg.norm(psi_in)
-                
-                psi_out = np.sqrt(P_out)
-                if np.linalg.norm(psi_out) > 0:
-                    psi_out /= np.linalg.norm(psi_out)
-                else:
-                    psi_out[0] = 1.0
-                    
-                unitaries = StateRouter.generate_routing_unitaries(psi_in, psi_out, num_unitaries=10)
-                
-                self.loaded_unitaries = unitaries
-                self.unitary_files = [f"Analytical Option {i+1}" for i in range(len(unitaries))]
-                self.current_unitary_idx = 0
-                self._load_unitary_from_list()
+        active_inputs = np.sum(P_in > 0)
+        
+        self.lbl_unitary.config(text=f"Optimizing {'coherent' if active_inputs <= 1 else 'incoherent'} routing (1000 restarts)...")
+        self.root.update()
+        
+        if active_inputs <= 1:
+            # Single input: coherent field-level optimization
+            psi_in = np.sqrt(P_in).astype(np.complex128)
+            norm = np.linalg.norm(psi_in)
+            if norm > 0:
+                psi_in /= norm
             else:
-                # Robust incoherent numerical routing (vmap)
-                self.lbl_unitary.config(text="Optimizing incoherent routing (1000 restarts)...")
-                self.root.update()
+                psi_in[0] = 1.0
                 
-                results = StateRouter.optimize_incoherent_routing_vmap(self.engine, P_in, P_out)
-                
-                self.loaded_unitaries = []
-                self.unitary_files = []
-                
-                for i, (thetas, phis, loss) in enumerate(results):
-                    U = self.engine.compute_full_unitary(thetas, phis)
-                    self.loaded_unitaries.append(np.asarray(U))
-                    self.unitary_files.append(f"Opt {i+1} (Loss: {float(loss):.4f})")
-                    
-                self.current_unitary_idx = 0
-                self._load_unitary_from_list()
+            psi_target = np.sqrt(P_out).astype(np.complex128)
+            norm_t = np.linalg.norm(psi_target)
+            if norm_t > 0:
+                psi_target /= norm_t
+            else:
+                psi_target[0] = 1.0
+
+            results = StateRouter.optimize_coherent_routing_vmap(self.engine, psi_in, psi_target)
+        else:
+            # Multi-input: incoherent power-level optimization
+            results = StateRouter.optimize_incoherent_routing_vmap(self.engine, P_in, P_out)
+        
+        # Store all results as phase configurations (not unitaries to decompose)
+        self._pr_results = results  # Keep raw phase results for export
+        self.loaded_unitaries = []
+        self.unitary_files = []
+        
+        for i, (thetas, phis, loss) in enumerate(results):
+            U = self.engine.compute_full_unitary(thetas, phis)
+            self.loaded_unitaries.append(np.asarray(U))
+            self.unitary_files.append(f"Option {i+1} (Loss: {loss:.6f})")
+            
+        self.current_unitary_idx = 0
+        self._apply_pr_result(0)
+    
+    def _apply_pr_result(self, idx):
+        """Applies a phase retrieval result directly to the mesh (no Clements decomposition)."""
+        if not hasattr(self, '_pr_results') or not self._pr_results:
+            return
+            
+        thetas, phis, loss = self._pr_results[idx]
+        
+        # Apply phases directly to mesh
+        for i, mid in enumerate(self.engine.mzi_ids):
+            self.phases[mid]['theta'] = float(thetas[i])
+            self.phases[mid]['phi'] = float(phis[i])
+            if self.selected_mzi == mid:
+                self.theta_var.set(float(thetas[i]) / float(np.pi))
+                self.phi_var.set(float(phis[i]) / float(np.pi))
+        
+        # Compute actual output for feedback
+        thetas_arr, phis_arr = self._get_phase_arrays()
+        U = self.engine.compute_full_unitary(thetas_arr, phis_arr)
+        
+        P_in = np.array(self.input_vars, dtype=np.float64)
+        if np.sum(P_in) == 0:
+            P_in[0] = 1.0
+            
+        active_inputs = np.sum(P_in > 0)
+        if active_inputs <= 1:
+            psi_in = np.sqrt(P_in).astype(np.complex128)
+            psi_in /= np.linalg.norm(psi_in)
+            psi_out = np.asarray(U) @ psi_in
+            P_actual = np.abs(psi_out)**2
+        else:
+            power_trans = np.abs(np.asarray(U))**2
+            P_actual = power_trans @ P_in
+        
+        P_target = np.array([max(0, v.get()) for v in self.target_vars], dtype=np.float64)
+        if np.sum(P_target) > 0:
+            P_target = P_target * (np.sum(P_in) / np.sum(P_target))
+        
+        # Display feedback
+        actual_str = ", ".join([f"{p:.3f}" for p in P_actual])
+        target_str = ", ".join([f"{p:.3f}" for p in P_target])
+        fidelity = 1.0 - np.mean((P_actual - P_target)**2)
+        
+        self.lbl_retrieval_status.config(
+            text=f"Target: [{target_str}]\nActual: [{actual_str}]\nFidelity: {fidelity:.6f} | Loss: {loss:.6f}"
+        )
+        self.lbl_unitary.config(text=f"Option {idx+1}/{len(self._pr_results)} (Loss: {loss:.6f})")
+        self._update_simulation()
 
     def _export_current_unitary(self):
         from tkinter import filedialog, messagebox
@@ -451,6 +515,31 @@ class GUI:
                 messagebox.showinfo("Export Successful", f"Unitary saved to {os.path.basename(filepath)}")
             except Exception as e:
                 messagebox.showerror("Export Error", f"Failed to save unitary: {e}")
+
+    def _export_top3_unitaries(self):
+        """Exports the top 3 best routing unitaries to .npy files."""
+        from tkinter import filedialog, messagebox
+        import os
+        
+        if not hasattr(self, '_pr_results') or not self._pr_results:
+            messagebox.showwarning("No Results", "Run phase retrieval first.")
+            return
+            
+        folder = filedialog.askdirectory(title="Select folder to save top 3 unitaries")
+        if not folder:
+            return
+            
+        top_n = min(3, len(self._pr_results))
+        saved = []
+        for i in range(top_n):
+            thetas, phis, loss = self._pr_results[i]
+            U = self.engine.compute_full_unitary(thetas, phis)
+            U_np = np.asarray(U)
+            fname = f"routing_unitary_rank{i+1}_loss{loss:.6f}.npy"
+            np.save(os.path.join(folder, fname), U_np)
+            saved.append(fname)
+            
+        messagebox.showinfo("Export Successful", f"Saved {top_n} unitaries:\n" + "\n".join(saved))
 
     def _on_error_change(self, event=None):
         """Updates the beamsplitter error model in the engine."""
@@ -474,9 +563,7 @@ class GUI:
         new_val = max(0, self.input_vars[idx] + delta)
         self.input_vars[idx] = new_val
         self.input_labels[idx].config(text=str(new_val))
-        if self.sim_mode.get() == "phase_retrieval":
-            self._on_target_change()
-        else:
+        if self.sim_mode.get() != "phase_retrieval":
             self._update_simulation()
 
     def _set_modes(self, n):
@@ -876,10 +963,14 @@ class GUI:
         """Loads and visualizes the currently selected unitary from the loaded list."""
         if not self.loaded_unitaries:
             return
-        U = self.loaded_unitaries[self.current_unitary_idx]
-        fname = self.unitary_files[self.current_unitary_idx]
-        self.lbl_unitary.config(text=f"Loaded: {fname} ({self.current_unitary_idx + 1} / {len(self.loaded_unitaries)})")
-        self._apply_unitary_decomposition(U, keep_inputs=True, keep_mode=True)
+        # In phase retrieval mode, apply phases directly (skip Clements)
+        if self.sim_mode.get() == "phase_retrieval" and hasattr(self, '_pr_results') and self._pr_results:
+            self._apply_pr_result(self.current_unitary_idx)
+        else:
+            U = self.loaded_unitaries[self.current_unitary_idx]
+            fname = self.unitary_files[self.current_unitary_idx]
+            self.lbl_unitary.config(text=f"Loaded: {fname} ({self.current_unitary_idx + 1} / {len(self.loaded_unitaries)})")
+            self._apply_unitary_decomposition(U, keep_inputs=True, keep_mode=True)
 
     def _prev_unitary(self):
         """Cycles to the previous unitary in the loaded list."""

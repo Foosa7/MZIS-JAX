@@ -54,29 +54,13 @@ class StateRouter:
         return unitaries
 
     @staticmethod
-    def optimize_incoherent_routing_vmap(engine, P_in, P_target, num_restarts=1000, max_iters=200):
+    def _run_vmap_optimization(engine, loss_fn, num_restarts=1000, max_iters=200):
         """
-        Pure JAX implementation. Runs `num_restarts` optimizations in parallel
-        on the GPU, without strict boundary walls.
-        Returns a list of unique phase configurations that successfully routed the light.
+        Core vmap optimization engine. Takes a loss_fn(phases) and runs
+        num_restarts parallel Adam optimizations, returning deduplicated results
+        sorted by loss.
         """
-        P_in = jnp.array(P_in, dtype=jnp.float64)
-        P_target = jnp.array(P_target, dtype=jnp.float64)
-        
-        target_sum = jnp.sum(P_target)
-        if target_sum > 0:
-            P_target = P_target * (jnp.sum(P_in) / target_sum)
-
         n_mzis = len(engine.mzi_ids)
-
-        def loss_fn(phases):
-            thetas = jnp.mod(phases[:n_mzis], 2 * jnp.pi)
-            phis = jnp.mod(phases[n_mzis:], 2 * jnp.pi)
-            
-            U = engine.compute_full_unitary(thetas, phis)
-            power_trans = jnp.abs(U)**2
-            P_out = power_trans @ P_in
-            return jnp.mean((P_out - P_target)**2)
 
         optimizer = optax.adam(learning_rate=0.05)
 
@@ -104,10 +88,10 @@ class StateRouter:
 
         final_phases_batch, final_losses = parallel_optimization(init_phases_batch)
 
+        # --- Deduplication and filtering ---
         success_threshold = 1e-4
         successful_mask = final_losses < success_threshold
         
-        # JAX arrays to NumPy for easy dynamic lists
         valid_phases = np.array(final_phases_batch[successful_mask])
         valid_losses = np.array(final_losses[successful_mask])
 
@@ -119,7 +103,6 @@ class StateRouter:
             p_wrapped = np.mod(p, 2 * np.pi)
             is_new = True
             for unique_p in unique_options:
-                # Wrap difference to handle 0 and 2pi equivalence
                 diff = np.abs(p_wrapped - unique_p)
                 diff = np.minimum(diff, 2*np.pi - diff)
                 if np.mean(diff) < tolerance:
@@ -130,19 +113,74 @@ class StateRouter:
                 unique_options.append(p_wrapped)
                 unique_losses.append(l)
                 
-        # If no runs were completely successful, at least return the best one
+        # Fallback: if nothing passed the threshold, return the single best run
         if not unique_options:
             best_idx = jnp.argmin(final_losses)
             best_phases = np.array(final_phases_batch[best_idx])
-            best_loss = final_losses[best_idx]
+            best_loss = float(final_losses[best_idx])
             unique_options.append(np.mod(best_phases, 2*np.pi))
             unique_losses.append(best_loss)
 
-        # Convert back to (thetas, phis, loss) tuples
         results = []
         for p, l in zip(unique_options, unique_losses):
             thetas = p[:n_mzis]
             phis = p[n_mzis:]
-            results.append((thetas, phis, l))
+            results.append((thetas, phis, float(l)))
             
+        results.sort(key=lambda x: x[2])
         return results
+
+    @staticmethod
+    def optimize_coherent_routing_vmap(engine, psi_in, psi_target, num_restarts=1000, max_iters=200):
+        """
+        Optimizes MZI phases so that |U @ psi_in|^2 matches |psi_target|^2.
+        Works for a single coherent input state. Uses field-level simulation.
+        """
+        psi_in = jnp.array(psi_in, dtype=jnp.complex128)
+        P_target = jnp.abs(jnp.array(psi_target, dtype=jnp.complex128))**2
+        
+        # Normalize target power to match input power
+        target_sum = jnp.sum(P_target)
+        input_power = jnp.sum(jnp.abs(psi_in)**2)
+        if target_sum > 0:
+            P_target = P_target * (input_power / target_sum)
+        
+        n_mzis = len(engine.mzi_ids)
+
+        def loss_fn(phases):
+            thetas = jnp.mod(phases[:n_mzis], 2 * jnp.pi)
+            phis = jnp.mod(phases[n_mzis:], 2 * jnp.pi)
+            
+            U = engine.compute_full_unitary(thetas, phis)
+            psi_out = U @ psi_in
+            P_out = jnp.abs(psi_out)**2
+            return jnp.mean((P_out - P_target)**2)
+
+        return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)
+
+    @staticmethod
+    def optimize_incoherent_routing_vmap(engine, P_in, P_target, num_restarts=1000, max_iters=200):
+        """
+        Pure JAX implementation. Runs `num_restarts` optimizations in parallel
+        on the GPU, without strict boundary walls.
+        Returns a list of unique phase configurations that successfully routed the light.
+        """
+        P_in = jnp.array(P_in, dtype=jnp.float64)
+        P_target = jnp.array(P_target, dtype=jnp.float64)
+        
+        target_sum = jnp.sum(P_target)
+        if target_sum > 0:
+            P_target = P_target * (jnp.sum(P_in) / target_sum)
+
+        n_mzis = len(engine.mzi_ids)
+
+        def loss_fn(phases):
+            thetas = jnp.mod(phases[:n_mzis], 2 * jnp.pi)
+            phis = jnp.mod(phases[n_mzis:], 2 * jnp.pi)
+            
+            U = engine.compute_full_unitary(thetas, phis)
+            power_trans = jnp.abs(U)**2
+            P_out = power_trans @ P_in
+            return jnp.mean((P_out - P_target)**2)
+
+        return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)
