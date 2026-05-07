@@ -248,8 +248,8 @@ class GUI:
         btn_export_top3 = ttk.Button(export_frame, text="Export Top 3", command=self._export_top3_unitaries)
         btn_export_top3.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
         
-        self.lbl_retrieval_status = ttk.Label(self.target_frame, text="", style="Panel.TLabel", wraplength=280)
-        self.lbl_retrieval_status.pack(anchor="w", pady=(5, 0))
+        btn_reset_pr = ttk.Button(self.target_frame, text="Reset to Identity", command=self._demo_clear)
+        btn_reset_pr.pack(fill=tk.X, pady=(0, 5))
 
         self.mzi_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
         self.mzi_frame.pack(fill=tk.X)
@@ -336,6 +336,11 @@ class GUI:
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         self.canvas.bind("<Configure>", self._draw_mesh)
         
+        # Keyboard shortcuts for MZI presets
+        self.root.bind("a", lambda e: self._set_preset(1.0, 0.0))   # Bar
+        self.root.bind("s", lambda e: self._set_preset(0.5, 0.0))   # 50:50
+        self.root.bind("d", lambda e: self._set_preset(0.0, 0.0))   # Cross
+        
         # Unitary cycle controls below canvas
         self.cycle_frame = ttk.Frame(mesh_area, style="Panel.TFrame")
         self.cycle_frame.pack(fill=tk.X, pady=(10, 0))
@@ -384,7 +389,6 @@ class GUI:
             self.target_vars[0].set(1.0)
             for i in range(1, self.n_modes):
                 self.target_vars[i].set(0.0)
-            self.lbl_retrieval_status.config(text="Set sliders and click Compute Routing.")
         else:
             self.btn_pr.config(bg="#333", fg="white")
             self.target_frame.pack_forget()
@@ -493,14 +497,6 @@ class GUI:
         if np.sum(P_target) > 0:
             P_target = P_target * (np.sum(P_in) / np.sum(P_target))
         
-        # Display feedback
-        actual_str = ", ".join([f"{p:.3f}" for p in P_actual])
-        target_str = ", ".join([f"{p:.3f}" for p in P_target])
-        fidelity = 1.0 - np.mean((P_actual - P_target)**2)
-        
-        self.lbl_retrieval_status.config(
-            text=f"Target: [{target_str}]\nActual: [{actual_str}]\nFidelity: {fidelity:.6f} | Loss: {loss:.6f}"
-        )
         self.lbl_unitary.config(text=f"Option {idx+1}/{len(self._pr_results)} (Loss: {loss:.6f})")
         self._update_simulation()
 
