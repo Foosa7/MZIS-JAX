@@ -457,6 +457,67 @@ class Engine:
         return all_probs, basis
 
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Hardware Calibration & Phase Constraints (Neurophox Integration)
+    # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    @jit
+    def apply_phase_constraints(thetas, phis):
+        """
+        Enforces realistic hardware constraints on the phases, ensuring they 
+        reside within the bounds [0, 2π). Similar to neurophox's common mode flow, 
+        this ensures DACs/heaters don't receive negative or out-of-bound voltage requests.
+        """
+        # Map phases into standard [0, 2π) bounds
+        thetas_norm = jnp.mod(thetas, 2 * jnp.pi)
+        phis_norm = jnp.mod(phis, 2 * jnp.pi)
+        
+        # If theta is in [π, 2π), we can reflect it to [0, π) by flipping phi
+        # since an MZI with internal phase θ + π is equivalent to θ with a π shift on phi.
+        # This reduces maximum required heating power!
+        reflect_mask = thetas_norm > jnp.pi
+        
+        thetas_opt = jnp.where(reflect_mask, 2 * jnp.pi - thetas_norm, thetas_norm)
+        phis_opt = jnp.where(reflect_mask, jnp.mod(phis_norm + jnp.pi, 2 * jnp.pi), phis_norm)
+        
+        return thetas_opt, phis_opt
+
+    @staticmethod
+    @jit
+    def parallel_nullification(amps_in, e_l, e_r):
+        """
+        JAX-native implementation of parallel nullification for a single layer of MZIs.
+        Given input coherent optical amplitudes (amps_in), calculates the required 
+        internal (θ) and external (φ) phases to perfectly route all power to the bar ports.
+        
+        This mimics the experimental self-calibration routine.
+        
+        Args:
+            amps_in: Complex input amplitudes to the MZI (shape: [2])
+            e_l, e_r: Beamsplitter errors
+        Returns:
+            theta, phi required for nullification
+        """
+        upper_in = amps_in[0]
+        lower_in = amps_in[1]
+        
+        # Calculate ideal required phases
+        # phi compensates for the relative phase difference between inputs
+        phi_req = jnp.angle(upper_in / (lower_in + 1e-12))
+        
+        # theta dictates the splitting ratio to counteract the power imbalance
+        # We need to consider the beamsplitter errors here for perfect nullification
+        sq_1_el = jnp.sqrt(1 + e_l)
+        sq_1_ml = jnp.sqrt(1 - e_l)
+        
+        # Power ratio considering the left defective beamsplitter
+        power_ratio = jnp.abs(upper_in / (lower_in + 1e-12))
+        theta_req = jnp.arctan(power_ratio * (sq_1_ml / sq_1_el)) * 2.0
+        
+        return jnp.mod(theta_req, 2 * jnp.pi), jnp.mod(phi_req, 2 * jnp.pi)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Utility
 # ──────────────────────────────────────────────────────────────────────────────

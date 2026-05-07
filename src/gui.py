@@ -28,7 +28,7 @@ class GUI:
         
         self.root.configure(bg=self.colors['bg'])
 
-        self.engine = Engine(n_modes=self.n_modes)
+        self.engine = Engine(n_modes=self.n_modes, bs_error=0.15)
         self.selected_mzi = None
         self.input_vars = [0] * n_modes
         self.sim_mode = tk.StringVar(value="quantum")
