@@ -7,6 +7,28 @@ from scipy.stats import unitary_group
 from scipy.optimize import minimize
 from .engine import ryser_permanent, _factorial
 
+# Detect GPU availability and set performance tiers
+_HAS_GPU = jax.default_backend() == 'gpu'
+
+# GPU: push hard — plenty of VRAM and parallelism
+# CPU: conservative — avoid hogging the main thread for too long
+if _HAS_GPU:
+    _CLASSICAL_RESTARTS = 500
+    _CLASSICAL_ITERS = 300
+    _QUANTUM_RESTARTS = 200
+    _QUANTUM_ITERS = 250
+    _LR = 0.03
+else:
+    _CLASSICAL_RESTARTS = 50
+    _CLASSICAL_ITERS = 150
+    _QUANTUM_RESTARTS = 30
+    _QUANTUM_ITERS = 100
+    _LR = 0.05
+
+print(f"[StateRouter] Backend: {jax.default_backend()} | "
+      f"Classical: {_CLASSICAL_RESTARTS}x{_CLASSICAL_ITERS} | "
+      f"Quantum: {_QUANTUM_RESTARTS}x{_QUANTUM_ITERS} | LR: {_LR}")
+
 class StateRouter:
     @staticmethod
     def get_unitary_mapping_state_to_basis(psi):
@@ -64,7 +86,7 @@ class StateRouter:
         """
         n_mzis = len(engine.mzi_ids)
 
-        optimizer = optax.adam(learning_rate=0.05)
+        optimizer = optax.adam(learning_rate=_LR)
 
         def single_optimization(init_phases):
             opt_state = optimizer.init(init_phases)
@@ -133,7 +155,9 @@ class StateRouter:
         return results
 
     @staticmethod
-    def optimize_coherent_routing_vmap(engine, psi_in, psi_target, num_restarts=100, max_iters=200):
+    def optimize_coherent_routing_vmap(engine, psi_in, psi_target, 
+                                        num_restarts=_CLASSICAL_RESTARTS, 
+                                        max_iters=_CLASSICAL_ITERS):
         """
         Optimizes MZI phases so that |U @ psi_in|^2 matches |psi_target|^2.
         Works for a single coherent input state. Uses field-level simulation.
@@ -161,7 +185,9 @@ class StateRouter:
         return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)
 
     @staticmethod
-    def optimize_incoherent_routing_vmap(engine, P_in, P_target, num_restarts=100, max_iters=200):
+    def optimize_incoherent_routing_vmap(engine, P_in, P_target, 
+                                          num_restarts=_CLASSICAL_RESTARTS, 
+                                          max_iters=_CLASSICAL_ITERS):
         """
         Pure JAX implementation. Runs `num_restarts` optimizations in parallel
         on the GPU, without strict boundary walls.
@@ -189,7 +215,8 @@ class StateRouter:
 
     @staticmethod
     def optimize_quantum_routing_vmap(engine, input_occupation, P_target_per_port, 
-                                      num_restarts=100, max_iters=150):
+                                      num_restarts=_QUANTUM_RESTARTS, 
+                                      max_iters=_QUANTUM_ITERS):
         """
         Quantum-aware optimizer. Directly optimizes MZI phases to match target
         marginal photon detection probabilities at each output port.

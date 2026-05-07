@@ -236,7 +236,7 @@ class GUI:
                              resolution=0.01)
             scale.pack(fill=tk.X, side=tk.LEFT, expand=True)
         
-        btn_compute = tk.Button(self.target_frame, text="⚡ Compute Routing", bg=self.colors['accent'], fg="black",
+        btn_compute = tk.Button(self.target_frame, text="Compute Routing", bg=self.colors['accent'], fg="black",
                                 font=("Arial", 11, "bold"), bd=0, activebackground="#00cc99",
                                 command=self._on_target_change)
         btn_compute.pack(fill=tk.X, pady=(10, 5), ipady=6)
@@ -407,16 +407,18 @@ class GUI:
         
         if is_quantum and n_photons > 0:
             # Quantum-aware: optimize directly for Fock detection probabilities
-            self.lbl_unitary.config(text=f"Quantum optimization ({n_photons} photon{'s' if n_photons > 1 else ''}, 100 restarts)...")
+            from .routing import _QUANTUM_RESTARTS, _QUANTUM_ITERS
+            self.lbl_unitary.config(text=f"Quantum optimization ({n_photons} photon{'s' if n_photons > 1 else ''}, {_QUANTUM_RESTARTS}x{_QUANTUM_ITERS})...")
             self.root.update()
             
             input_occ = [int(x) for x in P_in]
             results = StateRouter.optimize_quantum_routing_vmap(
-                self.engine, input_occ, P_out, num_restarts=100, max_iters=150
+                self.engine, input_occ, P_out
             )
         elif active_inputs <= 1:
             # Classical single input: coherent field-level optimization
-            self.lbl_unitary.config(text="Optimizing coherent routing (1000 restarts)...")
+            from .routing import _CLASSICAL_RESTARTS, _CLASSICAL_ITERS
+            self.lbl_unitary.config(text=f"Coherent optimization ({_CLASSICAL_RESTARTS}x{_CLASSICAL_ITERS})...")
             self.root.update()
             
             psi_in = np.sqrt(P_in).astype(np.complex128)
@@ -436,7 +438,8 @@ class GUI:
             results = StateRouter.optimize_coherent_routing_vmap(self.engine, psi_in, psi_target)
         else:
             # Classical multi-input: incoherent power-level optimization
-            self.lbl_unitary.config(text="Optimizing incoherent routing (1000 restarts)...")
+            from .routing import _CLASSICAL_RESTARTS, _CLASSICAL_ITERS
+            self.lbl_unitary.config(text=f"Incoherent optimization ({_CLASSICAL_RESTARTS}x{_CLASSICAL_ITERS})...")
             self.root.update()
             results = StateRouter.optimize_incoherent_routing_vmap(self.engine, P_in, P_out)
         
