@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import optax
 from scipy.stats import unitary_group
 from scipy.optimize import minimize
-from .engine import ryser_permanent, _factorial
+from src.engine import glynn_permanent, _factorial
 
 # Detect GPU availability and set performance tiers
 _HAS_GPU = jax.default_backend() == 'gpu'
@@ -285,7 +285,7 @@ class StateRouter:
             
             # Compute Fock probabilities via permanents
             all_U_sub = U[out_indices_arr][:, :, in_indices]
-            all_perms = jax.lax.map(ryser_permanent, all_U_sub)
+            all_perms = jax.lax.map(glynn_permanent, all_U_sub)
             all_perm_sq = jnp.abs(all_perms) ** 2
             all_probs = all_perm_sq / (norm_in * norm_out)
             

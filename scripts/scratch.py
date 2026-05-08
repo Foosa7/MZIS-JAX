@@ -2,6 +2,7 @@ import time
 import jax
 import jax.numpy as jnp
 from jax import jit, vmap
+from src.engine import glynn_permanent, _factorial
 
 @jit
 def ryser_permanent(M):
@@ -24,7 +25,7 @@ def test_closure():
     t0 = time.time()
     def compute_single_prob(out_idx):
         U_sub = U[out_idx][:, in_indices]
-        return ryser_permanent(U_sub)
+        return glynn_permanent(U_sub)
     vmap(compute_single_prob)(out_indices_arr).block_until_ready()
     return time.time() - t0
 
@@ -35,7 +36,7 @@ def test_no_closure():
     
     t0 = time.time()
     all_U_sub = U[out_indices_arr][:, :, in_indices]
-    vmap(ryser_permanent)(all_U_sub).block_until_ready()
+    vmap(glynn_permanent)(all_U_sub).block_until_ready()
     return time.time() - t0
 
 print("Closure 1:", test_closure())

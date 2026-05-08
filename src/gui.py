@@ -180,9 +180,9 @@ class GUI:
         hw_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         hw_frame.pack(fill=tk.X, pady=(0, 15))
         
-        self.error_mode = tk.StringVar(value="Ideal (No Error)")
+        self.error_mode = tk.StringVar(value="Ideal (No Losses)")
         self.error_dropdown = tk.OptionMenu(hw_frame, self.error_mode, 
-                                            "Ideal (No Error)", "Basic Loss (15%)", "Calibration Data",
+                                            "Ideal (No Losses)", "Basic Losses (15%)", "Calibration Data",
                                             command=self._on_error_change)
         self.error_dropdown.config(bg="#333", fg="white", activebackground="#444", activeforeground="white",
                                    bd=0, highlightthickness=0, font=("Arial", 10, "bold"))

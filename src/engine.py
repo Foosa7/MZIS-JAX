@@ -16,7 +16,7 @@ import json
 
 @jit
 def ryser_permanent(M):
-    """Computes the permanent of an n×n matrix using the vectorized Ryser formula.
+    """Computes the permanent of an nxn matrix using the vectorized Ryser formula.
 
     All 2^n subsets are enumerated simultaneously via bitmask operations,
     making this fully vectorized and differentiable through JAX.
@@ -44,6 +44,50 @@ def ryser_permanent(M):
     signs = jnp.where(is_odd, -1.0 + 0j, 1.0 + 0j)
 
     return jnp.sum(signs * products)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Vectorized Glynn Permanent
+# ──────────────────────────────────────────────────────────────────────────────
+
+@jit
+def glynn_permanent(M):
+    """Computes the permanent of an nxn matrix using the vectorized Glynn formula.
+    
+    Halves the memory and compute footprint compared to Ryser by fixing 
+    the first polarization element to 1 and iterating over 2^(n-1) states.
+    """
+    n = M.shape[0]
+
+    # 1. Generate 2^(n-1) bitmasks for the varying elements
+    num_subsets = 1 << (n - 1)                                # 2^(n-1)
+    indices = jnp.arange(num_subsets)                         # [0, 1, ..., 2^(n-1) - 1]
+    bit_positions = jnp.arange(n - 1)                         # [0, 1, ..., n-2]
+    
+    # Binary matrix of shape (2^(n-1), n-1)
+    binary_matrix = (indices[:, None] >> bit_positions[None, :]) & 1
+    
+    # 2. Build polarization vectors (+1 and -1)
+    polarizations = jnp.where(binary_matrix == 1, -1.0, 1.0).astype(M.dtype)
+    
+    # Fix the first element to 1 to halve the computational space
+    fixed_col = jnp.ones((num_subsets, 1), dtype=M.dtype)
+    deltas = jnp.concatenate([fixed_col, polarizations], axis=1) # (2^(n-1), n)
+    
+    # 3. Vectorized matrix multiplication to get column sums
+    # deltas @ M computes sum(delta_k * M_{k, j}) for all subsets simultaneously
+    col_sums = deltas @ M  # (2^(n-1), n)
+    
+    # 4. Product of column sums for each polarization vector
+    products = jnp.prod(col_sums, axis=1)  # (2^(n-1),)
+    
+    # 5. Compute signs for each term based on the number of -1s
+    # The first column is always +1, so we only need to popcount the remaining n-1 columns
+    popcounts = jnp.sum(binary_matrix, axis=1)
+    signs = jnp.where(popcounts % 2 == 1, -1.0, 1.0).astype(M.dtype)
+    
+    # 6. Final sum and normalization by 2^(n-1)
+    return jnp.sum(signs * products) / num_subsets
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -491,7 +535,7 @@ class Engine:
         all_U_sub = U[out_indices_arr][:, :, in_indices]  # shape: (n_basis, n_photons, n_photons)
 
         # Map compute permanents using JAX lax.map to prevent OOM
-        all_perms = jax.lax.map(ryser_permanent, all_U_sub)
+        all_perms = jax.lax.map(glynn_permanent, all_U_sub)
         all_perm_sq = jnp.abs(all_perms) ** 2
         
         all_probs = all_perm_sq / (norm_in * norm_out)
