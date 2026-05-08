@@ -389,6 +389,7 @@ class GUI:
             self.target_vars[0].set(1.0)
             for i in range(1, self.n_modes):
                 self.target_vars[i].set(0.0)
+
         else:
             self.btn_pr.config(bg="#333", fg="white")
             self.target_frame.pack_forget()
@@ -506,20 +507,22 @@ class GUI:
         
         thetas, phis = self._get_phase_arrays()
         U = self.engine.compute_full_unitary(thetas, phis)
-        U_np = np.asarray(U)
         
         filepath = filedialog.asksaveasfilename(
             title="Save Unitary",
-            defaultextension=".npy",
-            filetypes=[("Numpy array", "*.npy")],
-            initialfile="retrieved_unitary.npy"
+            defaultextension=".npz",
+            filetypes=[("Numpy archive", "*.npz")],
+            initialfile="retrieved_unitary.npz"
         )
         if filepath:
             try:
-                np.save(filepath, U_np)
-                messagebox.showinfo("Export Successful", f"Unitary saved to {os.path.basename(filepath)}")
+                np.savez(filepath, 
+                         unitary=np.asarray(U),
+                         thetas=np.asarray(thetas),
+                         phis=np.asarray(phis))
+                messagebox.showinfo("Export Successful", f"Saved to {os.path.basename(filepath)}")
             except Exception as e:
-                messagebox.showerror("Export Error", f"Failed to save unitary: {e}")
+                messagebox.showerror("Export Error", f"Failed to save: {e}")
 
     def _export_top3_unitaries(self):
         """Exports the top 3 best routing unitaries to .npy files."""
@@ -539,9 +542,11 @@ class GUI:
         for i in range(top_n):
             thetas, phis, loss = self._pr_results[i]
             U = self.engine.compute_full_unitary(thetas, phis)
-            U_np = np.asarray(U)
-            fname = f"routing_unitary_rank{i+1}_loss{loss:.6f}.npy"
-            np.save(os.path.join(folder, fname), U_np)
+            fname = f"routing_rank{i+1}_loss{loss:.6f}.npz"
+            np.savez(os.path.join(folder, fname),
+                     unitary=np.asarray(U),
+                     thetas=np.asarray(thetas),
+                     phis=np.asarray(phis))
             saved.append(fname)
             
         messagebox.showinfo("Export Successful", f"Saved {top_n} unitaries:\n" + "\n".join(saved))
@@ -889,26 +894,55 @@ class GUI:
     def _import_unitary_decomposition(self):
         """Opens a file dialog to import a .npy or .npz unitary matrix and visualizes it."""
         from tkinter import filedialog
+        import os
         filepath = filedialog.askopenfilename(
             title="Select Unitary File",
-            filetypes=[("Numpy arrays", "*.npy *.npz"), ("All files", "*.*")]
+            filetypes=[("Numpy files", "*.npy *.npz"), ("All files", "*.*")]
         )
         if not filepath:
             return
             
         try:
-            U_loaded = np.load(filepath)
-            if filepath.endswith('.npz'):
-                U_loaded = U_loaded[U_loaded.files[0]]
+            data = np.load(filepath, allow_pickle=False)
+            
+            # Check if this is a .npz with embedded phases (exported from phase retrieval)
+            if isinstance(data, np.lib.npyio.NpzFile) and 'thetas' in data and 'phis' in data:
+                thetas = data['thetas']
+                phis = data['phis']
+                U = data.get('unitary', None)
                 
-            if len(U_loaded.shape) != 2 or U_loaded.shape[0] != U_loaded.shape[1]:
-                raise ValueError("Array must be a 2D square matrix.")
+                # Resize mesh if needed
+                n_mzis = len(self.engine.mzi_ids)
+                if len(thetas) != n_mzis:
+                    # Try to infer mode count from unitary shape
+                    if U is not None and len(U.shape) == 2:
+                        self._set_modes(U.shape[0])
                 
-            if U_loaded.shape[0] != self.n_modes:
-                print(f"Switching mesh to {U_loaded.shape[0]} modes to match loaded unitary.")
-                self._set_modes(U_loaded.shape[0])
+                # Apply phases directly — no Clements decomposition
+                for i, mid in enumerate(self.engine.mzi_ids):
+                    self.phases[mid]['theta'] = float(thetas[i])
+                    self.phases[mid]['phi'] = float(phis[i])
+                    if self.selected_mzi == mid:
+                        self.theta_var.set(float(thetas[i]) / float(np.pi))
+                        self.phi_var.set(float(phis[i]) / float(np.pi))
                 
-            self._apply_unitary_decomposition(U_loaded)
+                self.lbl_unitary.config(text=f"Loaded phases: {os.path.basename(filepath)}")
+                self._update_simulation()
+            else:
+                # Plain unitary matrix — use Clements decomposition
+                if isinstance(data, np.lib.npyio.NpzFile):
+                    U_loaded = data[data.files[0]]
+                else:
+                    U_loaded = data
+                    
+                if len(U_loaded.shape) != 2 or U_loaded.shape[0] != U_loaded.shape[1]:
+                    raise ValueError("Array must be a 2D square matrix.")
+                    
+                if U_loaded.shape[0] != self.n_modes:
+                    print(f"Switching mesh to {U_loaded.shape[0]} modes to match loaded unitary.")
+                    self._set_modes(U_loaded.shape[0])
+                    
+                self._apply_unitary_decomposition(U_loaded)
             
         except Exception as e:
             from tkinter import messagebox
