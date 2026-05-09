@@ -180,9 +180,9 @@ class GUI:
         hw_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         hw_frame.pack(fill=tk.X, pady=(0, 15))
         
-        self.error_mode = tk.StringVar(value="Ideal (No Losses)")
+        self.error_mode = tk.StringVar(value="Ideal (No Error)")
         self.error_dropdown = tk.OptionMenu(hw_frame, self.error_mode, 
-                                            "Ideal (No Losses)", "Basic Losses (15%)", "Calibration Data",
+                                            "Ideal (No Error)", "Beamsplitter Errors (15%)", "Calibration Data",
                                             command=self._on_error_change)
         self.error_dropdown.config(bg="#333", fg="white", activebackground="#444", activeforeground="white",
                                    bd=0, highlightthickness=0, font=("Arial", 10, "bold"))
@@ -556,7 +556,7 @@ class GUI:
         mode = self.error_mode.get()
         if mode == "Ideal (No Error)":
             self.engine.set_bs_error(0.0)
-        elif mode == "Basic Loss (15%)":
+        elif mode == "Beamsplitter Errors (15%)":
             self.engine.set_bs_error(0.15)
         elif mode == "Calibration Data":
             import os

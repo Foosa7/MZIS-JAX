@@ -53,7 +53,7 @@ def parse_args():
     parser.add_argument(
         'input_npz',
         nargs='?',
-        default='unitary/retrieved_unitary.npz',
+        default='unitary/test.npz',
         help='Path to the input .npz archive containing thetas and phis arrays.'
     )
     parser.add_argument(
