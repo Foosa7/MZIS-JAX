@@ -182,7 +182,7 @@ class GUI:
         
         self.error_mode = tk.StringVar(value="Ideal (No Losses)")
         self.error_dropdown = tk.OptionMenu(hw_frame, self.error_mode, 
-                                            "Ideal (No Losses)", "Basic Losses (15%)", "Calibration Data",
+                                            "Ideal (No Losses)", "Beamsplitter Error (15%)", "Calibration Data",
                                             command=self._on_error_change)
         self.error_dropdown.config(bg="#333", fg="white", activebackground="#444", activeforeground="white",
                                    bd=0, highlightthickness=0, font=("Arial", 10, "bold"))
@@ -554,9 +554,9 @@ class GUI:
     def _on_error_change(self, event=None):
         """Updates the beamsplitter error model in the engine."""
         mode = self.error_mode.get()
-        if mode == "Ideal (No Error)":
+        if mode == "Ideal (No Losses)":
             self.engine.set_bs_error(0.0)
-        elif mode == "Basic Loss (15%)":
+        elif mode == "Beamsplitter Error (15%)":
             self.engine.set_bs_error(0.15)
         elif mode == "Calibration Data":
             import os

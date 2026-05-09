@@ -166,52 +166,38 @@ class Engine:
 
 
 
-    # If you pass a numpy.float32 or a jax.numpy.float32 scalar into this function,
-    # both of those isinstance checks will evaluate to False. 
-    # The code will fall through to the else block, treat the scalar as an array,
-    # and potentially crash later when JAX tries to broadcast shapes.
+    # # If you pass a numpy.float32 or a jax.numpy.float32 scalar into this function,
+    # # both of those isinstance checks will evaluate to False. 
+    # # The code will fall through to the else block, treat the scalar as an array,
+    # # and potentially crash later when JAX tries to broadcast shapes.
 
-    # The Fix: Use jnp.isscalar(). We use the fixed version
+    # # The Fix: Use jnp.isscalar(). We use the fixed version
 
     def set_bs_error(self, bs_error):
         """Sets the global beamsplitter error and updates the internal arrays."""
         self.bs_error = bs_error
-        if isinstance(bs_error, float) or isinstance(bs_error, int):
-            self.e_l = jnp.ones(self.n_mzis) * bs_error
-            self.e_r = jnp.ones(self.n_mzis) * bs_error
-        elif isinstance(bs_error, tuple):
-            self.e_l = jnp.asarray(bs_error[0])
-            self.e_r = jnp.asarray(bs_error[1])
-        else:
-            self.e_l = jnp.asarray(bs_error)
-            self.e_r = self.e_l
-
-
-    # def set_bs_error(self, bs_error):
-    #     """Sets the global beamsplitter error and updates the internal arrays."""
-    #     self.bs_error = bs_error
         
-    #     # IMPROVEMENT: Use jnp.isscalar to catch Python, Numpy, and JAX scalars
-    #     if jnp.isscalar(bs_error):
-    #         self.e_l = jnp.full(self.n_mzis, bs_error)
-    #         self.e_r = jnp.full(self.n_mzis, bs_error)
-    #     elif isinstance(bs_error, tuple):
-    #         self.e_l = jnp.asarray(bs_error[0])
-    #         self.e_r = jnp.asarray(bs_error[1])
-    #     else:
-    #         self.e_l = jnp.asarray(bs_error)
-    #         self.e_r = self.e_l
-
-
-    # Issue: Calling JAX math functions (jnp.sqrt, jnp.maximum) inside a Python for loop 
-    # forces the system to constantly pass single numbers back and forth between the CPU (Python) 
-    # and the GPU (XLA). This I/O dispatch overhead kills performance.
+        # 1. Safely handle any scalar (Python int/float or JAX scalar)
+        if isinstance(bs_error, (float, int)) or jnp.isscalar(bs_error):
+            # Force float64 to match your jax_enable_x64 config
+            self.e_l = jnp.full(self.n_mzis, float(bs_error), dtype=jnp.float64)
+            self.e_r = jnp.full(self.n_mzis, float(bs_error), dtype=jnp.float64)
+            
+        elif isinstance(bs_error, tuple):
+            self.e_l = jnp.asarray(bs_error[0], dtype=jnp.float64)
+            self.e_r = jnp.asarray(bs_error[1], dtype=jnp.float64)
+            
+        else:
+            self.e_l = jnp.asarray(bs_error, dtype=jnp.float64)
+            self.e_r = self.e_l
 
     def load_calibration_errors(self, json_path, default_e=0.0):
         """
         Loads empirical beamsplitter errors from a node-isolation calibration JSON.
-        Calculates beamsplitter error from fringe visibility.
+        Safely built using pure Python math to avoid JAX compilation crashes.
         """
+        import math # Use standard math to prevent JAX from dispatching in the loop
+        
         try:
             with open(json_path, 'r') as f:
                 cal_data = json.load(f)
@@ -220,82 +206,35 @@ class Engine:
             self.set_bs_error(default_e)
             return
 
+        # 2. Flatten the dictionary lookup once
+        phase_cal = cal_data.get('phase_calibration', {})
         e_l_list = []
-        e_r_list = []
+
         for mid in self.mzi_ids:
             key = f"{mid}_theta"
             e = default_e
-            if 'phase_calibration' in cal_data and key in cal_data['phase_calibration']:
-                params = cal_data['phase_calibration'][key].get('phase_params', {})
+            
+            # 3. Safe, branchless dictionary extraction
+            params = phase_cal.get(key, {}).get('phase_params', {})
+            
+            if params:
                 A = params.get('amplitude', 0.0)
                 C = params.get('offset', 1.0)
                 
-                # Protect against division by zero or negative sqrt
                 if C + A > 0:
-                    # Visibility V = A/C. e^2 = (1-V)/(1+V) = (C-A)/(C+A)
                     e_sq = (C - A) / (C + A)
-                    e = float(jnp.sqrt(jnp.maximum(0.0, float(e_sq))))
+                    # 4. standard math.sqrt instead of jnp.sqrt
+                    e = math.sqrt(max(0.0, e_sq))
             
             e_l_list.append(e)
-            e_r_list.append(e)
             
-        self.e_l = jnp.array(e_l_list)
-        self.e_r = jnp.array(e_r_list)
-        self.bs_error = (self.e_l, self.e_r)
-
-
-
-    # Fix (Extract, Load, Transform): Use pure Python to extract the raw data into lists. 
-    # Transfer those lists to the GPU exactly once to create large arrays, 
-    # and then process all the math simultaneously (vectorized).
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Vectorized Data Loading (Critical Optimization for Large Arrays)
-    # ──────────────────────────────────────────────────────────────────────
-
-    # def load_calibration_errors(self, json_path, default_e=0.0):
-    #     """Reads the file and orchestrates the data pipeline."""
-    #     try:
-    #         with open(json_path, 'r') as f:
-    #             cal_data = json.load(f)
-    #     except Exception as e:
-    #         print(f"Failed to load calibration data: {e}")
-    #         self.set_bs_error(default_e)
-    #         return
-
-    #     phase_cal = cal_data.get('phase_calibration', {})
-
-    #     A_list, C_list, valid_list = [], [], []
-
-    #     for mid in self.mzi_ids:
-    #         params = phase_cal.get(f"{mid}_theta", {}).get('phase_params', {})
-    #         if params:
-    #             A_list.append(params.get('amplitude', 0.0))
-    #             C_list.append(params.get('offset', 1.0))
-    #             valid_list.append(True)
-    #         else:
-    #             A_list.append(0.0) 
-    #             C_list.append(1.0) 
-    #             valid_list.append(False)
-
-    #     # Convert to JAX arrays
-    #     A = jnp.array(A_list)
-    #     C = jnp.array(C_list)
-    #     valid = jnp.array(valid_list)
-
-    #     # Pass the arrays to the GPU compiler
-    #     self.e_l, self.e_r = self._compute_errors_jit(A, C, valid, default_e)
-    #     self.bs_error = (self.e_l, self.e_r)
-
-    # @staticmethod
-    # @jit
-    # def _compute_errors_jit(A, C, valid, default_e):
-    #     """Pure math kernel. Takes arrays, returns arrays. No 'self'."""
-    #     e_sq = (C - A) / (C + A)
-    #     e_calculated = jnp.sqrt(jnp.maximum(0.0, e_sq))
+        # 5. Convert to JAX array exactly once at the end
+        # e_l is the power splitting ratio error of the left BS, 
+        # e_r is the power splitting ratio error of the right BS
+        self.e_l = jnp.array(e_l_list, dtype=jnp.float64)
+        self.e_r = self.e_l
+        self.bs_error = (self.e_l, self.e_r) 
         
-    #     e_l = jnp.where(valid, e_calculated, default_e)
-    #     return e_l, e_l
 
     # ──────────────────────────────────────────────────────────────────────
     # Layer and full unitary construction (JAX-native)
@@ -494,6 +433,7 @@ class Engine:
         U_total, _ = jax.lax.scan(scan_body, U0, jnp.arange(n_cols))
         return U_total
 
+
     def compute_full_unitary(self, thetas, phis):
         """Computes the total unitary matrix of the entire Clements mesh."""
         # Prepare static arrays for the JIT-compiled function
@@ -514,16 +454,64 @@ class Engine:
         els_padded = jnp.pad(self.e_l, (0, pad_total))
         ers_padded = jnp.pad(self.e_r, (0, pad_total))
 
-        return self._compute_full_unitary(
+        # 1. Get the mathematically perfect internal matrix from the GPU
+        U_internal = self._compute_full_unitary(
             thetas_padded, phis_padded, els_padded, ers_padded, col_slices_arr,
             col_mode_tops_padded, self.n_modes
         )
+
+        # ──────────────────────────────────────────────────────────────────
+        # 2. FACET COUPLING WRAPPER (The "Reality" Layer)
+        # ──────────────────────────────────────────────────────────────────
+        if self.use_calibration:
+            p_in = 3.0
+            p_out_measured = jnp.array([
+                0.062, 0.062, 0.049, 0.050, 0.057, 0.066, 0.038, 0.047
+            ], dtype=jnp.float64)
+
+            # Assuming symmetric loss across input and output facets: C_in = C_out = sqrt(T)
+            transmission = p_out_measured / p_in
+            coupling_coeffs = jnp.sqrt(transmission)
+            C = jnp.diag(coupling_coeffs)
+
+            # Wrap the perfect internal matrix with physical coupling
+            U_real = C @ U_internal @ C
+            return U_real
+            
+        else:
+            # If no calibration is loaded, return the perfect math matrix
+            return U_internal
+
+    # def compute_full_unitary(self, thetas, phis):
+    #     """Computes the total unitary matrix of the entire Clements mesh."""
+    #     # Prepare static arrays for the JIT-compiled function
+    #     col_slices_arr = jnp.array(self._col_slices, dtype=jnp.int32)
+
+    #     # Pad mode_tops to uniform shape for scan
+    #     max_mzis = max(len(col) for col in self.layout)
+    #     padded_tops = []
+    #     for tops in self._col_mode_tops:
+    #         pad_len = max_mzis - tops.shape[0]
+    #         padded = jnp.pad(tops, (0, pad_len), constant_values=0)
+    #         padded_tops.append(padded)
+    #     col_mode_tops_padded = jnp.stack(padded_tops)
+
+    #     pad_total = max_mzis
+    #     thetas_padded = jnp.pad(thetas, (0, pad_total))
+    #     phis_padded = jnp.pad(phis, (0, pad_total))
+    #     els_padded = jnp.pad(self.e_l, (0, pad_total))
+    #     ers_padded = jnp.pad(self.e_r, (0, pad_total))
+
+    #     return self._compute_full_unitary(
+    #         thetas_padded, phis_padded, els_padded, ers_padded, col_slices_arr,
+    #         col_mode_tops_padded, self.n_modes
+    #     )
 
     # ──────────────────────────────────────────────────────────────────────
     # Classical power flow
     # ──────────────────────────────────────────────────────────────────────
 
-    def get_classical_flow(self, thetas, phis, input_powers, coherent=False):
+    def get_classical_flow(self, thetas, phis, input_powers, coherent=True):
         """Calculates power distribution across each layer.
         
         If coherent=True, models coherent wave interference (used for quantum mode visual proxy).
