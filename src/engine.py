@@ -1,4 +1,5 @@
 import os
+import math
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax
@@ -47,7 +48,7 @@ def ryser_permanent(M):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Vectorized Glynn Permanent
+# Vectorized Glynn Permanent (faster and less memory)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @jit
@@ -109,7 +110,7 @@ class Engine:
 
         # Build ordered list of MZI IDs and their mode indices
         self.mzi_ids = []
-        self.mzi_modes = []  # list of (top_mode,) for each MZI
+        self.mzi_modes = []  # list of (mode_top,) for each MZI (the upper port index)
         for col in self.layout:
             for mzi in col:
                 self.mzi_ids.append(mzi['id'])
@@ -129,7 +130,7 @@ class Engine:
             self._col_slices.append((idx, n))
             idx += n
 
-        # Precompute mode pairs for each column as JAX arrays (for vectorized layer build)
+        # Precompute mode pairs(mode_top) for each column as JAX arrays (for vectorized layer build)
         self._col_mode_tops = []
         for col in self.layout:
             tops = jnp.array([mzi['mode_top'] for mzi in col], dtype=jnp.int32)
@@ -163,6 +164,15 @@ class Engine:
             cols.append(col_mzis)
         return cols
 
+
+
+    # If you pass a numpy.float32 or a jax.numpy.float32 scalar into this function,
+    # both of those isinstance checks will evaluate to False. 
+    # The code will fall through to the else block, treat the scalar as an array,
+    # and potentially crash later when JAX tries to broadcast shapes.
+
+    # The Fix: Use jnp.isscalar(). We use the fixed version
+
     def set_bs_error(self, bs_error):
         """Sets the global beamsplitter error and updates the internal arrays."""
         self.bs_error = bs_error
@@ -175,6 +185,27 @@ class Engine:
         else:
             self.e_l = jnp.asarray(bs_error)
             self.e_r = self.e_l
+
+
+    # def set_bs_error(self, bs_error):
+    #     """Sets the global beamsplitter error and updates the internal arrays."""
+    #     self.bs_error = bs_error
+        
+    #     # IMPROVEMENT: Use jnp.isscalar to catch Python, Numpy, and JAX scalars
+    #     if jnp.isscalar(bs_error):
+    #         self.e_l = jnp.full(self.n_mzis, bs_error)
+    #         self.e_r = jnp.full(self.n_mzis, bs_error)
+    #     elif isinstance(bs_error, tuple):
+    #         self.e_l = jnp.asarray(bs_error[0])
+    #         self.e_r = jnp.asarray(bs_error[1])
+    #     else:
+    #         self.e_l = jnp.asarray(bs_error)
+    #         self.e_r = self.e_l
+
+
+    # Issue: Calling JAX math functions (jnp.sqrt, jnp.maximum) inside a Python for loop 
+    # forces the system to constantly pass single numbers back and forth between the CPU (Python) 
+    # and the GPU (XLA). This I/O dispatch overhead kills performance.
 
     def load_calibration_errors(self, json_path, default_e=0.0):
         """
@@ -211,6 +242,60 @@ class Engine:
         self.e_l = jnp.array(e_l_list)
         self.e_r = jnp.array(e_r_list)
         self.bs_error = (self.e_l, self.e_r)
+
+
+
+    # Fix (Extract, Load, Transform): Use pure Python to extract the raw data into lists. 
+    # Transfer those lists to the GPU exactly once to create large arrays, 
+    # and then process all the math simultaneously (vectorized).
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Vectorized Data Loading (Critical Optimization for Large Arrays)
+    # ──────────────────────────────────────────────────────────────────────
+
+    # def load_calibration_errors(self, json_path, default_e=0.0):
+    #     """Reads the file and orchestrates the data pipeline."""
+    #     try:
+    #         with open(json_path, 'r') as f:
+    #             cal_data = json.load(f)
+    #     except Exception as e:
+    #         print(f"Failed to load calibration data: {e}")
+    #         self.set_bs_error(default_e)
+    #         return
+
+    #     phase_cal = cal_data.get('phase_calibration', {})
+
+    #     A_list, C_list, valid_list = [], [], []
+
+    #     for mid in self.mzi_ids:
+    #         params = phase_cal.get(f"{mid}_theta", {}).get('phase_params', {})
+    #         if params:
+    #             A_list.append(params.get('amplitude', 0.0))
+    #             C_list.append(params.get('offset', 1.0))
+    #             valid_list.append(True)
+    #         else:
+    #             A_list.append(0.0) 
+    #             C_list.append(1.0) 
+    #             valid_list.append(False)
+
+    #     # Convert to JAX arrays
+    #     A = jnp.array(A_list)
+    #     C = jnp.array(C_list)
+    #     valid = jnp.array(valid_list)
+
+    #     # Pass the arrays to the GPU compiler
+    #     self.e_l, self.e_r = self._compute_errors_jit(A, C, valid, default_e)
+    #     self.bs_error = (self.e_l, self.e_r)
+
+    # @staticmethod
+    # @jit
+    # def _compute_errors_jit(A, C, valid, default_e):
+    #     """Pure math kernel. Takes arrays, returns arrays. No 'self'."""
+    #     e_sq = (C - A) / (C + A)
+    #     e_calculated = jnp.sqrt(jnp.maximum(0.0, e_sq))
+        
+    #     e_l = jnp.where(valid, e_calculated, default_e)
+    #     return e_l, e_l
 
     # ──────────────────────────────────────────────────────────────────────
     # Layer and full unitary construction (JAX-native)
