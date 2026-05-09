@@ -367,6 +367,13 @@ class GUI:
         plot_widget = self.canvas_plot.get_tk_widget()
         plot_widget.configure(bg=self.colors['bg'], highlightthickness=0)
         plot_widget.pack(fill=tk.BOTH, expand=True)
+        self.canvas_plot.mpl_connect('button_press_event', self._on_plot_click)
+        
+        # Copy all values button
+        self.btn_copy_all = tk.Button(self.plot_frame, text="Copy All", bg="#333", fg="white", bd=0,
+                                      font=("Arial", 10, "bold"), activebackground="#444", activeforeground="white",
+                                      command=self._copy_all_values)
+        self.btn_copy_all.pack(fill=tk.X, pady=(10, 0), padx=5, ipady=5)
 
     def _set_sim_mode(self, mode):
         """Sets the simulation mode (quantum/classical) and updates UI."""
@@ -817,6 +824,64 @@ class GUI:
             self.phases[self.selected_mzi]['phi'] = self.phi_var.get() * float(jnp.pi)
             self._update_simulation()
 
+    def _on_plot_click(self, event):
+        """Copies the value of the clicked state or port to clipboard."""
+        if event.inaxes != self.ax:
+            return
+        if not hasattr(self, '_last_labels') or not hasattr(self, '_last_probs'):
+            return
+            
+        y = event.ydata
+        if y is None:
+            return
+            
+        row = int(round(y))
+        if 0 <= row < len(self._last_labels):
+            prob = self._last_probs[row]
+            
+            if self.sim_mode.get() == "quantum":
+                text_to_copy = f"{prob*100:.1f}%"
+            else:
+                text_to_copy = f"{prob:.5f}"
+                
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text_to_copy)
+            
+            # Temporary title to indicate copy
+            original_title = self.ax.get_title()
+            self.ax.set_title(f"Copied: {text_to_copy}", color=self.colors['accent'])
+            self.canvas_plot.draw()
+            
+            def restore():
+                self.ax.set_title(original_title, color="white")
+                self.canvas_plot.draw()
+            self.root.after(1000, restore)
+
+    def _copy_all_values(self):
+        """Copies all values (probabilities or powers) to clipboard."""
+        if not hasattr(self, '_last_probs'):
+            return
+            
+        if self.sim_mode.get() == "quantum":
+            lines = [f"{p*100:.1f}%" for p in self._last_probs]
+        else:
+            lines = [f"{p:.5f}" for p in self._last_probs]
+            
+        text_to_copy = "\n".join(lines)
+        
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text_to_copy)
+        
+        # Visual feedback
+        original_title = self.ax.get_title()
+        self.ax.set_title("Copied All Values!", color=self.colors['accent'])
+        self.canvas_plot.draw()
+        
+        def restore():
+            self.ax.set_title(original_title, color="white")
+            self.canvas_plot.draw()
+        self.root.after(1000, restore)
+
     def _set_preset(self, t, p):
         """Applies predefined phase settings to the selected MZI."""
         self.theta_var.set(t)
@@ -1145,6 +1210,8 @@ class GUI:
             probs = out_powers.tolist()
             title = "Output Optical Power & Phase"
 
+        self._last_labels = labels
+        self._last_probs = probs
         y_pos = np.arange(len(labels))
 
         if not probs or sum(probs) == 0:
