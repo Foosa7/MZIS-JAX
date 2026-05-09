@@ -160,3 +160,4 @@ neurophox
 *.jpg
 *.jpeg
 reports/
+src/__pycache__/gui.cpython-313.pyc
