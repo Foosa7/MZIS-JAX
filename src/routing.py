@@ -297,3 +297,62 @@ class StateRouter:
             return jnp.mean((P_marginal - P_target)**2)
         
         return StateRouter._run_vmap_optimization(engine, loss_fn, num_restarts, max_iters)
+
+    @staticmethod
+    def optimize_unitary_vmap(engine, U_target, num_restarts=_CLASSICAL_RESTARTS, max_iters=_CLASSICAL_ITERS):
+        """
+        Directly optimizes the physical hardware phases to synthesize a target Unitary matrix.
+        Note: Physical chips usually lack the final layer of diagonal phase screens (alphas)
+        required by Clements decomposition. This optimizer simulates them virtually to match 
+        the target unitary exactly.
+        """
+        U_target = jnp.array(U_target, dtype=jnp.complex128)
+        n_mzis = len(engine.mzi_ids)
+        n_modes = engine.n_modes
+
+        # We will run a custom vmap optimization here since we need to optimize alphas too
+        optimizer = optax.adam(learning_rate=_LR)
+
+        def loss_fn(phases):
+            # first n_mzis are thetas, next n_mzis are phis, last n_modes are alphas
+            thetas = jnp.mod(phases[:n_mzis], 2 * jnp.pi)
+            phis = jnp.mod(phases[n_mzis:2*n_mzis], 2 * jnp.pi)
+            alphas = jnp.mod(phases[2*n_mzis:], 2 * jnp.pi)
+            
+            U_chip = engine.compute_full_unitary(thetas, phis)
+            D_alpha = jnp.diag(jnp.exp(1j * alphas))
+            U_full = D_alpha @ U_chip
+            
+            return jnp.mean(jnp.abs(U_full - U_target)**2)
+
+        def single_optimization(init_phases):
+            opt_state = optimizer.init(init_phases)
+            def step(carry, _):
+                params, state = carry
+                loss_val, grads = jax.value_and_grad(loss_fn)(params)
+                updates, state = optimizer.update(grads, state)
+                params = optax.apply_updates(params, updates)
+                return (params, state), loss_val
+            (final_params, _), loss_history = jax.lax.scan(step, (init_phases, opt_state), None, length=max_iters)
+            return final_params, loss_history[-1]
+
+        parallel_optimization = jax.jit(jax.vmap(single_optimization))
+        
+        key = jax.random.PRNGKey(42)
+        init_phases_batch = jax.random.uniform(
+            key, shape=(num_restarts, 2 * n_mzis + n_modes), minval=0, maxval=2*jnp.pi
+        )
+
+        final_phases_batch, final_losses = parallel_optimization(init_phases_batch)
+        
+        # Get best result
+        best_idx = jnp.argmin(final_losses)
+        best_phases = final_phases_batch[best_idx]
+        best_loss = final_losses[best_idx]
+        
+        best_phases = np.mod(best_phases, 2*np.pi)
+        thetas = best_phases[:n_mzis]
+        phis = best_phases[n_mzis:2*n_mzis]
+        alphas = best_phases[2*n_mzis:]
+        
+        return thetas, phis, alphas, float(best_loss)

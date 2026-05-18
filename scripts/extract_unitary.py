@@ -1,8 +1,8 @@
 import numpy as np
 
 # 1. Define your file names
-input_file = "unitary/test1.npz"   # The file exported from your GUI
-output_file = "unitary/test1.npy"   # The new file you want to create
+input_file = "unitary/test.npz"   # The file exported from your GUI
+output_file = "unitary/test.npy"   # The new file you want to create
 
 # 2. Load the JAX twin archive
 data = np.load(input_file)

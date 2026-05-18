@@ -85,6 +85,30 @@ class GUI:
         # separator
         style.configure("TSeparator", background=self.colors['grid_lines'])
 
+        # notebook
+        style.configure("TNotebook", 
+                        background=self.colors['bg'], 
+                        borderwidth=0, 
+                        tabmargins=[0, 0, 0, 0],
+                        darkcolor=self.colors['bg'],
+                        lightcolor=self.colors['bg'],
+                        bordercolor=self.colors['bg'])
+        
+        style.configure("TNotebook.Tab", 
+                        background=self.colors['panel'], 
+                        foreground="#888888", 
+                        font=("Arial", 10, "bold"),
+                        borderwidth=0, 
+                        padding=[20, 8],
+                        lightcolor=self.colors['panel'],
+                        bordercolor=self.colors['panel'])
+                        
+        style.map("TNotebook.Tab",
+                  background=[("selected", self.colors['bg'])],
+                  foreground=[("selected", self.colors['accent'])],
+                  lightcolor=[("selected", self.colors['bg'])],
+                  bordercolor=[("selected", self.colors['bg'])])
+
     def _create_layout(self):
         """Constructs the main interface layout including control panels and canvas."""
         self.main_container = ttk.Frame(self.root)
@@ -314,8 +338,14 @@ class GUI:
         btn_switch = ttk.Button(decomp_frame, text="Switching Matrix", command=self._demo_switching_decomposition)
         btn_switch.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
         
-        btn_import = ttk.Button(self.demo_frame, text="Import Unitary", command=self._import_unitary_decomposition)
-        btn_import.pack(fill=tk.X, pady=2)
+        import_export_frame = ttk.Frame(self.demo_frame, style="Panel.TFrame")
+        import_export_frame.pack(fill=tk.X, pady=2)
+        
+        btn_import = ttk.Button(import_export_frame, text="Import Unitary", command=self._import_unitary_decomposition)
+        btn_import.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        
+        btn_export = ttk.Button(import_export_frame, text="Export Clements", command=self._export_clements_decomposition)
+        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
         
         btn_import_folder = ttk.Button(self.demo_frame, text="Import Unitary Folder", command=self._import_unitary_folder)
         btn_import_folder.pack(fill=tk.X, pady=2)
@@ -359,21 +389,44 @@ class GUI:
         self.plot_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 20), pady=20)
         self.plot_frame.pack_propagate(False) # Fix width
         
+        self.notebook = ttk.Notebook(self.plot_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Tab 1: Output Power
+        self.tab_power = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_power, text="Output Power")
+        
         self.fig = plt.Figure(figsize=(4, 8), facecolor=self.colors['bg'])
         self.ax = self.fig.add_subplot(111)
         self.ax.set_facecolor(self.colors['bg'])
         
-        self.canvas_plot = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
+        self.canvas_plot = FigureCanvasTkAgg(self.fig, master=self.tab_power)
         plot_widget = self.canvas_plot.get_tk_widget()
         plot_widget.configure(bg=self.colors['bg'], highlightthickness=0)
         plot_widget.pack(fill=tk.BOTH, expand=True)
         self.canvas_plot.mpl_connect('button_press_event', self._on_plot_click)
         
         # Copy all values button
-        self.btn_copy_all = tk.Button(self.plot_frame, text="Copy All", bg="#333", fg="white", bd=0,
+        self.btn_copy_all = tk.Button(self.tab_power, text="Copy All", bg="#333", fg="white", bd=0,
                                       font=("Arial", 10, "bold"), activebackground="#444", activeforeground="white",
                                       command=self._copy_all_values)
         self.btn_copy_all.pack(fill=tk.X, pady=(10, 0), padx=5, ipady=5)
+        
+        # Tab 2: Fidelity & Matrix
+        self.tab_fidelity = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_fidelity, text="Fidelity Matrix")
+
+        self.fig_matrix = plt.Figure(figsize=(4, 8), facecolor=self.colors['bg'])
+        self.ax_matrix_exp = self.fig_matrix.add_subplot(311)
+        self.ax_matrix_sim = self.fig_matrix.add_subplot(312)
+        self.ax_matrix_diff = self.fig_matrix.add_subplot(313)
+        for ax in (self.ax_matrix_exp, self.ax_matrix_sim, self.ax_matrix_diff):
+            ax.set_facecolor(self.colors['bg'])
+        
+        self.canvas_matrix = FigureCanvasTkAgg(self.fig_matrix, master=self.tab_fidelity)
+        matrix_widget = self.canvas_matrix.get_tk_widget()
+        matrix_widget.configure(bg=self.colors['bg'], highlightthickness=0)
+        matrix_widget.pack(fill=tk.BOTH, expand=True)
 
     def _set_sim_mode(self, mode):
         """Sets the simulation mode (quantum/classical) and updates UI."""
@@ -518,16 +571,22 @@ class GUI:
         filepath = filedialog.asksaveasfilename(
             title="Save Unitary",
             defaultextension=".npz",
-            filetypes=[("Numpy archive", "*.npz")],
-            initialfile="retrieved_unitary.npz"
+            filetypes=[("Numpy files", "*.npz *.npy")],
+            initialfile="retrieved_unitary"
         )
         if filepath:
             try:
-                np.savez(filepath, 
+                base, _ = os.path.splitext(filepath)
+                npz_path = base + ".npz"
+                npy_path = base + ".npy"
+                
+                np.savez(npz_path, 
                          unitary=np.asarray(U),
                          thetas=np.asarray(thetas),
                          phis=np.asarray(phis))
-                messagebox.showinfo("Export Successful", f"Saved to {os.path.basename(filepath)}")
+                np.save(npy_path, np.asarray(U))
+                
+                messagebox.showinfo("Export Successful", f"Saved both:\n{os.path.basename(npz_path)}\n{os.path.basename(npy_path)}")
             except Exception as e:
                 messagebox.showerror("Export Error", f"Failed to save: {e}")
 
@@ -558,6 +617,46 @@ class GUI:
             
         messagebox.showinfo("Export Successful", f"Saved {top_n} unitaries:\n" + "\n".join(saved))
 
+    def _export_clements_decomposition(self):
+        """Exports the current mesh as Clements-decomposed thetas/phis."""
+        from tkinter import filedialog, messagebox
+        import os
+        import sys
+        import numpy as np
+        
+        try:
+            pnn_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            if pnn_dir not in sys.path:
+                sys.path.append(pnn_dir)
+            from decompose.pnn import decompose_clements
+            
+            thetas, phis = self._get_phase_arrays()
+            U_chip = np.asarray(self.engine.compute_full_unitary(thetas, phis))
+            
+            clements_phis, clements_thetas, alphas = decompose_clements(U_chip, block='mzi')
+            
+            filepath = filedialog.asksaveasfilename(
+                title="Save Clements Decomposition",
+                defaultextension=".npz",
+                filetypes=[("Numpy files", "*.npz *.npy")],
+                initialfile="clements_phases"
+            )
+            if filepath:
+                base, _ = os.path.splitext(filepath)
+                npz_path = base + ".npz"
+                npy_path = base + ".npy"
+                
+                np.savez(npz_path, 
+                         unitary=np.asarray(U_chip),
+                         thetas=clements_thetas,
+                         phis=clements_phis,
+                         alphas=alphas)
+                np.save(npy_path, np.asarray(U_chip))
+                
+                messagebox.showinfo("Export Successful", f"Saved both:\n{os.path.basename(npz_path)}\n{os.path.basename(npy_path)}")
+                
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export: {e}")
     def _on_error_change(self, event=None):
         """Updates the beamsplitter error model in the engine."""
         mode = self.error_mode.get()
@@ -1098,6 +1197,7 @@ class GUI:
             self._set_sim_mode("classical")
             
         self._demo_clear(update=False)
+        self.U_target = np.array(U_target)
         
         try:
             import sys
@@ -1143,6 +1243,7 @@ class GUI:
 
     def _demo_clear(self, update=True):
         """Resets the mesh to Identity (all Bar state) and clears photons."""
+        self.U_target = None
         for i in range(self.n_modes):
             self.input_vars[i] = 0
             self.input_labels[i].config(text="0")
@@ -1242,3 +1343,59 @@ class GUI:
         self.ax.set_xlim(0, max_p * 1.35 if max_p > 0 else 1) 
         self.fig.tight_layout(pad=2)
         self.canvas_plot.draw()
+        
+        # Update fidelity tab
+        for ax in (self.ax_matrix_exp, self.ax_matrix_sim, self.ax_matrix_diff):
+            ax.clear()
+            ax.set_facecolor(self.colors['bg'])
+        
+        if self.sim_mode.get() == "classical" and getattr(self, 'U_target', None) is not None:
+            thetas, phis = self._get_phase_arrays()
+            U_chip = self.engine.compute_full_unitary(thetas, phis)
+            P_meas = np.abs(U_chip)**2
+            
+            N_modes = self.n_modes
+            U_t = self.U_target
+            if U_t.shape[0] >= N_modes and U_t.shape[1] >= N_modes:
+                P_expected = np.abs(U_t[:N_modes, :N_modes])**2
+            else:
+                P_expected = np.abs(U_t)**2
+                
+            valid = ~np.isnan(P_expected) & ~np.isnan(P_meas)
+            if np.any(valid):
+                with np.errstate(invalid='ignore'):
+                    prod = P_expected[valid] * P_meas[valid]
+                prod_clipped = np.clip(np.real(prod), 0.0, None)
+                sum_overlap = float(np.sum(np.sqrt(prod_clipped)))
+                F = sum_overlap / float(N_modes)
+            else:
+                F = float('nan')
+                
+            P_diff = P_expected - P_meas
+            
+            self.ax_matrix_exp.imshow(P_expected, origin='upper', cmap='viridis', vmin=0.0, vmax=1.0)
+            self.ax_matrix_exp.set_title("Expected |U|^2", color="white", fontsize=10, fontweight='bold')
+            
+            self.ax_matrix_sim.imshow(P_meas, origin='upper', cmap='viridis', vmin=0.0, vmax=1.0)
+            self.ax_matrix_sim.set_title("Simulated |U|^2", color="white", fontsize=10, fontweight='bold')
+            
+            maxabs = np.nanmax(np.abs(P_diff)) if not np.all(np.isnan(P_diff)) else 0.0
+            self.ax_matrix_diff.imshow(P_diff, origin='upper', cmap='bwr', vmin=-maxabs, vmax=maxabs)
+            self.ax_matrix_diff.set_title(f"Difference (Expected - Simulated)\nFidelity: {F:.4f}", color="white", fontsize=10, fontweight='bold')
+            
+            for ax in (self.ax_matrix_exp, self.ax_matrix_sim, self.ax_matrix_diff):
+                ax.set_xticks([])
+                ax.set_yticks([])
+                
+            self.ax_matrix_diff.set_xlabel("Input Port", color="white")
+            self.ax_matrix_diff.set_ylabel("Output Port", color="white")
+        else:
+            self.ax_matrix_exp.axis('off')
+            self.ax_matrix_diff.axis('off')
+            
+            self.ax_matrix_sim.text(0.5, 0.5, "Import a Unitary\nin Classical Mode", 
+                                color="white", ha="center", va="center")
+            self.ax_matrix_sim.axis('off')
+            
+        self.fig_matrix.tight_layout()
+        self.canvas_matrix.draw()
