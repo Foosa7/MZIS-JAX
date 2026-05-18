@@ -345,7 +345,10 @@ class GUI:
         btn_import.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
         
         btn_export = ttk.Button(import_export_frame, text="Export Clements", command=self._export_clements_decomposition)
-        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 2))
+
+        btn_opt = ttk.Button(import_export_frame, text="🪄", command=self._optimize_unitary)
+        btn_opt.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
         
         btn_import_folder = ttk.Button(self.demo_frame, text="Import Unitary Folder", command=self._import_unitary_folder)
         btn_import_folder.pack(fill=tk.X, pady=2)
@@ -1098,6 +1101,7 @@ class GUI:
                     U_loaded = data[data.files[0]]
                 else:
                     U_loaded = data
+                self.U_target = U_loaded
                     
                 if len(U_loaded.shape) != 2 or U_loaded.shape[0] != U_loaded.shape[1]:
                     raise ValueError("Array must be a 2D square matrix.")
@@ -1187,6 +1191,30 @@ class GUI:
         if self.loaded_unitaries:
             self.current_unitary_idx = (self.current_unitary_idx + 1) % len(self.loaded_unitaries)
             self._load_unitary_from_list()
+
+    def _optimize_unitary(self):
+        """Optimizes the imported unitary from expected to actual output."""
+        if not hasattr(self, 'U_target') or self.U_target is None:
+            from tkinter import messagebox
+            messagebox.showwarning("No Unitary", "Import or generate a unitary first.")
+            return
+
+        from .unitary_optimizer import UnitaryOptimizer
+        self.lbl_unitary.config(text="Optimizing unitary hardware phases...")
+        self.root.update()
+
+        thetas, phis, alphas, loss = UnitaryOptimizer.optimize_unitary_vmap(self.engine, self.U_target)
+
+        # Apply optimized phases directly to mesh
+        for i, mid in enumerate(self.engine.mzi_ids):
+            self.phases[mid]['theta'] = float(thetas[i])
+            self.phases[mid]['phi'] = float(phis[i])
+            if self.selected_mzi == mid:
+                self.theta_var.set(float(thetas[i]) / float(np.pi))
+                self.phi_var.set(float(phis[i]) / float(np.pi))
+
+        self.lbl_unitary.config(text=f"Optimization Complete (Loss: {loss:.6e})")
+        self._update_simulation()
 
     def _apply_unitary_decomposition(self, U_target, keep_inputs=False, keep_mode=False):
         """Decomposes a given unitary matrix and assigns the phases to the mesh."""

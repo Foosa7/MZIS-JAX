@@ -13,7 +13,7 @@ _HAS_GPU = jax.default_backend() == 'gpu'
 # GPU: push hard — plenty of VRAM and parallelism
 # CPU: conservative — avoid hogging the main thread for too long
 if _HAS_GPU:
-    _CLASSICAL_RESTARTS = 500
+    _CLASSICAL_RESTARTS = 10
     _CLASSICAL_ITERS = 300
     _QUANTUM_RESTARTS = 200
     _QUANTUM_ITERS = 250
