@@ -1209,33 +1209,19 @@ class GUI:
             
             phis, thetas, alphas = decompose_clements(U_target, block='mzi')
             
-            gamma = np.zeros(self.n_modes)
-            
             # Map to engine layout
-            # pnn.py 'theta' is half of engine's 'theta', and single-arm phase shifters 
-            # cause spatial phase accumulation that we must absorb into phi
+            # pnn.py 'theta' is half of engine's 'theta'
             for col_idx, col in enumerate(self.engine.layout):
                 p = col_idx // 2
                 for mzi in col:
                     q = mzi['mode_top']
                     mid = mzi['id']
                     
-                    theta_p = thetas[q, p]
-                    phi_p = phis[q, p]
-                    
-                    theta_eng = 2 * theta_p
-                    phi_eng = phi_p + gamma[q+1] - gamma[q] + np.pi
-                    
-                    theta_val = float(np.mod(theta_eng, 2 * np.pi))
-                    phi_val = float(np.mod(phi_eng, 2 * np.pi))
+                    theta_val = float(np.mod(2 * thetas[q, p], 2 * np.pi))
+                    phi_val = float(np.mod(phis[q, p], 2 * np.pi))
                     
                     self.phases[mid]['theta'] = theta_val
                     self.phases[mid]['phi'] = phi_val
-                    
-                    # Update accumulated phase for both arms
-                    gamma_new = theta_p + gamma[q+1] + np.pi
-                    gamma[q] = gamma_new
-                    gamma[q+1] = gamma_new
                     
                     if self.selected_mzi == mid:
                         self.theta_var.set(theta_val / float(jnp.pi))
