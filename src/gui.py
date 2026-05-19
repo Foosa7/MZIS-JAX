@@ -164,6 +164,21 @@ class GUI:
         control_panel.bind('<Enter>', _bind_scroll)
         control_panel.bind('<Leave>', _unbind_scroll)
 
+        # Execution Mode (Simulator vs Hardware)
+        ttk.Label(pad_frame, text="Execution Mode", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
+        exec_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        exec_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.exec_mode = tk.StringVar(value="simulator")
+        
+        self.btn_sim = tk.Button(exec_frame, text="Simulator", bg=self.colors['accent'], fg="black", bd=0,
+                                 font=("Arial", 10, "bold"), command=self._set_sim_exec)
+        self.btn_sim.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        
+        self.btn_hw = tk.Button(exec_frame, text="Hardware (Lab)", bg="#333", fg="white", bd=0,
+                                font=("Arial", 10, "bold"), command=self._set_hw_exec)
+        self.btn_hw.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+
         # Chip size buttons
         ttk.Label(pad_frame, text="Chip Architecture", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
         size_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
@@ -430,6 +445,68 @@ class GUI:
         matrix_widget = self.canvas_matrix.get_tk_widget()
         matrix_widget.configure(bg=self.colors['bg'], highlightthickness=0)
         matrix_widget.pack(fill=tk.BOTH, expand=True)
+
+    def _set_sim_exec(self):
+        """Switches execution to local Simulator mode."""
+        self.exec_mode.set("simulator")
+        self.btn_sim.config(bg=self.colors['accent'], fg="black")
+        self.btn_hw.config(bg="#333", fg="white")
+
+    def _set_hw_exec(self):
+        """Initiates handshake and switches execution to Hardware mode."""
+        from tkinter import messagebox
+        import requests
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Hardware Authentication")
+        dialog.geometry("300x260")
+        dialog.configure(bg=self.colors['panel'])
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Server IP (Tailscale):", style="Panel.TLabel").pack(pady=(10, 2))
+        ip_entry = tk.Entry(dialog, bg="#333", fg="white", insertbackground="white")
+        ip_entry.insert(0, "127.0.0.1")
+        ip_entry.pack(pady=2, padx=20, fill=tk.X)
+
+        ttk.Label(dialog, text="User ID:", style="Panel.TLabel").pack(pady=(5, 2))
+        user_entry = tk.Entry(dialog, bg="#333", fg="white", insertbackground="white")
+        user_entry.pack(pady=2, padx=20, fill=tk.X)
+        
+        ttk.Label(dialog, text="Password:", style="Panel.TLabel").pack(pady=(5, 2))
+        pass_entry = tk.Entry(dialog, show="*", bg="#333", fg="white", insertbackground="white")
+        pass_entry.pack(pady=2, padx=20, fill=tk.X)
+        
+        def attempt_login():
+            ip = ip_entry.get()
+            user = user_entry.get()
+            pwd = pass_entry.get()
+            if not user or not pwd or not ip:
+                messagebox.showerror("Error", "Please fill in all fields.", parent=dialog)
+                return
+            
+            # Change login button to reflect loading
+            btn.config(text="Connecting...", state="disabled")
+            dialog.update()
+
+            try:
+                # Basic handshake to verify FastAPI server is running
+                resp = requests.get(f"http://{ip}:8000/docs", timeout=3)
+                resp.raise_for_status()
+                
+                self.server_ip = ip
+                self.user_id = user
+                self.exec_mode.set("hardware")
+                self.btn_sim.config(bg="#333", fg="white")
+                self.btn_hw.config(bg=self.colors['accent'], fg="black")
+                dialog.destroy()
+                messagebox.showinfo("Authenticated", f"Securely connected to lab server at {ip} as {user}.", parent=self.root)
+            except Exception as e:
+                btn.config(text="Login", state="normal")
+                messagebox.showerror("Connection Failed", f"Could not reach server at {ip}:8000.\n\nMake sure the FastAPI server is running and Tailscale IP is correct.\nError: {e}", parent=dialog)
+                
+        btn = tk.Button(dialog, text="Login", bg=self.colors['accent'], fg="black", font=("Arial", 10, "bold"), command=attempt_login)
+        btn.pack(pady=15)
 
     def _set_sim_mode(self, mode):
         """Sets the simulation mode (quantum/classical) and updates UI."""
