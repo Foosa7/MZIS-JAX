@@ -1,0 +1,37 @@
+{
+  "A4": {"theta": 0, "phi": 31},
+  "A3": {"theta": 1, "phi": 30},
+  "A2": {"theta": 2, "phi": 29},
+  "A1": {"theta": 3, "phi": 28},
+
+  "B3": {"theta": 4, "phi": 34},
+  "B2": {"theta": 5, "phi": 33},
+  "B1": {"theta": 6, "phi": 32},
+
+  "C4": {"theta": 7, "phi": 38},
+  "C3": {"theta": 8, "phi": 37},
+  "C2": {"theta": 9, "phi": 36},
+  "C1": {"theta": 10, "phi": 35},
+
+  "D3": {"theta": 11, "phi": 41},
+  "D2": {"theta": 12, "phi": 40},
+  "D1": {"theta": 13, "phi": 39},
+
+  "E4": {"theta": 14, "phi": 45},
+  "E3": {"theta": 15, "phi": 44},
+  "E2": {"theta": 16, "phi": 43},
+  "E1": {"theta": 17, "phi": 42},
+
+  "F3": {"theta": 18, "phi": 48},
+  "F2": {"theta": 19, "phi": 47},
+  "F1": {"theta": 20, "phi": 46},
+
+  "G4": {"theta": 21, "phi": 52},
+  "G3": {"theta": 22, "phi": 51},
+  "G2": {"theta": 23, "phi": 50},
+  "G1": {"theta": 24, "phi": 49},
+
+  "H1": {"theta": 27, "phi": 53},
+  "H2": {"theta": 26, "phi": 54},
+  "H3": {"theta": 25, "phi": 55}
+}

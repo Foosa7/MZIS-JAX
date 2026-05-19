@@ -164,21 +164,6 @@ class GUI:
         control_panel.bind('<Enter>', _bind_scroll)
         control_panel.bind('<Leave>', _unbind_scroll)
 
-        # Execution Mode (Simulator vs Hardware)
-        ttk.Label(pad_frame, text="Execution Mode", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
-        exec_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
-        exec_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        self.exec_mode = tk.StringVar(value="simulator")
-        
-        self.btn_sim = tk.Button(exec_frame, text="Simulator", bg=self.colors['accent'], fg="black", bd=0,
-                                 font=("Arial", 10, "bold"), command=self._set_sim_exec)
-        self.btn_sim.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
-        
-        self.btn_hw = tk.Button(exec_frame, text="Hardware (Lab)", bg="#333", fg="white", bd=0,
-                                font=("Arial", 10, "bold"), command=self._set_hw_exec)
-        self.btn_hw.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
-
         # Chip size buttons
         ttk.Label(pad_frame, text="Chip Architecture", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
         size_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
@@ -193,7 +178,20 @@ class GUI:
             btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
             self.size_buttons[n] = btn
 
-        ttk.Label(pad_frame, text="Simulation Mode", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
+        # Simulation Mode + Live Toggle
+        header_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
+        header_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(header_frame, text="Simulation Mode", style="Header.TLabel").pack(side=tk.LEFT, anchor="w")
+        
+        self.lbl_live_dot = tk.Label(header_frame, text="●", fg="#ff4444", bg=self.colors['panel'], font=("Arial", 12))
+        
+        self.is_live = tk.BooleanVar(value=False)
+        self.btn_toggle_live = tk.Checkbutton(header_frame, text="LIVE", variable=self.is_live, 
+                                              bg=self.colors['panel'], fg="white", activebackground=self.colors['panel'], activeforeground="white",
+                                              selectcolor="#333", command=self._on_live_toggle)
+        self.btn_toggle_live.pack(side=tk.RIGHT, padx=5)
+
         mode_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
         mode_frame.pack(fill=tk.X, pady=(0, 15))
         
@@ -214,162 +212,20 @@ class GUI:
             self.btn_q.config(bg="#333", fg="white")
             self.btn_c.config(bg=self.colors['accent'], fg="black")
 
-        # Hardware Errors
-        ttk.Label(pad_frame, text="Hardware Imperfections", style="Header.TLabel").pack(anchor="w", pady=(15, 5))
-        hw_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
-        hw_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        self.error_mode = tk.StringVar(value="Ideal (No Error)")
-        self.error_dropdown = tk.OptionMenu(hw_frame, self.error_mode, 
-                                            "Ideal (No Error)", "Beamsplitter Errors (15%)", "Calibration Data",
-                                            command=self._on_error_change)
-        self.error_dropdown.config(bg="#333", fg="white", activebackground="#444", activeforeground="white",
-                                   bd=0, highlightthickness=0, font=("Arial", 10, "bold"))
-        self.error_dropdown["menu"].config(bg="#333", fg="white", activebackground=self.colors['accent'], activeforeground="black", font=("Arial", 10))
-        self.error_dropdown.pack(fill=tk.X, pady=5)
+        # Container for swappable UI components
+        self.ui_container = ttk.Frame(pad_frame, style="Panel.TFrame")
+        self.ui_container.pack(fill=tk.X, expand=True)
 
-        ttk.Label(pad_frame, text="Light Inputs", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
-        
-        input_grid = ttk.Frame(pad_frame, style="Panel.TFrame")
-        input_grid.pack(fill=tk.X)
-        
-        self.input_labels = []
-        for i in range(self.n_modes):
-            row = ttk.Frame(input_grid, style="Panel.TFrame")
-            row.pack(fill=tk.X, pady=2)
-            
-            ttk.Label(row, text=f"Port {i+1}", style="Panel.TLabel", width=8).pack(side=tk.LEFT)
-            
-            # minus button
-            btn_minus = tk.Button(row, text="-", width=3, bg="#333", fg="white", bd=0,
-                                  activebackground="#444", activeforeground="white",
-                                  command=lambda idx=i: self._change_input(idx, -1))
-            btn_minus.pack(side=tk.LEFT, padx=2)
-            
-            # value label
-            lbl = tk.Label(row, text="0", width=4, bg="#1e1e1e", fg=self.colors['accent'], font=("Arial", 11, "bold"))
-            lbl.pack(side=tk.LEFT, padx=2)
-            self.input_labels.append(lbl)
-            
-            # plus button
-            btn_plus = tk.Button(row, text="+", width=3, bg="#333", fg="white", bd=0,
-                                 activebackground="#444", activeforeground="white",
-                                 command=lambda idx=i: self._change_input(idx, 1))
-            btn_plus.pack(side=tk.LEFT, padx=2)
+        from .sim_gui import build_sim_controls
+        from .control_gui import build_hw_controls
 
-        ttk.Separator(pad_frame, orient='horizontal').pack(fill='x', pady=20)
+        self.sim_container = ttk.Frame(self.ui_container, style="Panel.TFrame")
+        build_sim_controls(self, self.sim_container)
+        self.sim_container.pack(fill=tk.X)
 
-        self.dynamic_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
-        self.dynamic_frame.pack(fill=tk.X)
-
-        self.target_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
-        
-        ttk.Label(self.target_frame, text="Target Outputs (Phase Retrieval)", style="Header.TLabel").pack(anchor="w", pady=(0, 10))
-        for i in range(self.n_modes):
-            f = ttk.Frame(self.target_frame, style="Panel.TFrame")
-            f.pack(fill=tk.X, pady=2)
-            ttk.Label(f, text=f"Port {i+1}", style="Panel.TLabel", width=8).pack(side=tk.LEFT)
-            scale = tk.Scale(f, from_=0, to=1.0, variable=self.target_vars[i], orient=tk.HORIZONTAL, 
-                             bg=self.colors['panel'], fg="white", troughcolor="#111",
-                             activebackground=self.colors['accent'], highlightthickness=0, bd=0,
-                             resolution=0.01)
-            scale.pack(fill=tk.X, side=tk.LEFT, expand=True)
-        
-        btn_compute = tk.Button(self.target_frame, text="Compute Routing", bg=self.colors['accent'], fg="black",
-                                font=("Arial", 11, "bold"), bd=0, activebackground="#00cc99",
-                                command=self._on_target_change)
-        btn_compute.pack(fill=tk.X, pady=(10, 5), ipady=6)
-            
-        export_frame = ttk.Frame(self.target_frame, style="Panel.TFrame")
-        export_frame.pack(fill=tk.X, pady=(0, 5))
-        btn_export = ttk.Button(export_frame, text="Export Current Unitary", command=self._export_current_unitary)
-        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
-        btn_export_top3 = ttk.Button(export_frame, text="Export Top 3", command=self._export_top3_unitaries)
-        btn_export_top3.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
-        
-        btn_reset_pr = ttk.Button(self.target_frame, text="Reset to Identity", command=self._demo_clear)
-        btn_reset_pr.pack(fill=tk.X, pady=(0, 5))
-
-        self.mzi_frame = ttk.Frame(self.dynamic_frame, style="Panel.TFrame")
-        self.mzi_frame.pack(fill=tk.X)
-        self.target_frame.pack_forget()
-        
-        ttk.Label(self.mzi_frame, text="MZI Config", style="Header.TLabel").pack(anchor="w")
-        self.lbl_selected = ttk.Label(self.mzi_frame, text="Select an MZI on the mesh", 
-                                      foreground="#888", style="Panel.TLabel")
-        self.lbl_selected.pack(pady=(5, 15), anchor="w")
-
-        self.theta_var = tk.DoubleVar()
-        self.phi_var = tk.DoubleVar()
-        
-        def create_slider(parent, label, var, r_max):
-            """Creates a labeled slider widget for phase adjustment."""
-            f = ttk.Frame(parent, style="Panel.TFrame")
-            f.pack(fill=tk.X, pady=5)
-            ttk.Label(f, text=label, style="Panel.TLabel").pack(anchor="w")
-            scale = tk.Scale(f, from_=0, to=r_max, variable=var, orient=tk.HORIZONTAL, 
-                             bg=self.colors['panel'], fg="white", troughcolor="#111",
-                             activebackground=self.colors['accent'], highlightthickness=0, bd=0,
-                             resolution=0.01, command=lambda x: self._on_param_change())
-            scale.pack(fill=tk.X)
-            
-        create_slider(self.mzi_frame, "Internal phase (θ) - Splitting (xπ)", self.theta_var, 2.0)
-        create_slider(self.mzi_frame, "External phase (φ) - Phase Shift (xπ)", self.phi_var, 2.0)
-
-        # preset buttons
-        ttk.Label(self.mzi_frame, text="Quick Presets", style="Panel.TLabel").pack(anchor="w", pady=(15, 5))
-        btn_frame = ttk.Frame(self.mzi_frame, style="Panel.TFrame")
-        btn_frame.pack(fill=tk.X)
-        
-        # helper to style buttons
-        def mk_btn(txt, t, p):
-            """Creates a preset button with specific theta and phi values."""
-            b = ttk.Button(btn_frame, text=txt, command=lambda: self._set_preset(t, p))
-            b.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-            
-        mk_btn("Bar", 1.0, 0.0)
-        mk_btn("50:50", 0.5, 0.0)
-        mk_btn("Cross", 0.0, 0.0)
-
-        # Demos
-        ttk.Separator(pad_frame, orient='horizontal').pack(fill='x', pady=20)
-        
-        self.demo_frame = ttk.Frame(pad_frame, style="Panel.TFrame")
-        self.demo_frame.pack(fill=tk.X)
-        ttk.Label(self.demo_frame, text="Demos", style="Header.TLabel").pack(anchor="w", pady=(0, 5))
-        
-        btn_hom = ttk.Button(self.demo_frame, text="HOM Dip (2 Photons)", command=self._demo_hom)
-        btn_hom.pack(fill=tk.X, pady=2)
-        
-        btn_rand = ttk.Button(self.demo_frame, text="Random Boson Sampling", command=self._demo_random)
-        btn_rand.pack(fill=tk.X, pady=2)
-        
-        decomp_frame = ttk.Frame(self.demo_frame, style="Panel.TFrame")
-        decomp_frame.pack(fill=tk.X, pady=2)
-        
-        btn_haar = ttk.Button(decomp_frame, text="Haar Random", command=self._demo_unitary_decomposition)
-        btn_haar.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
-        
-        btn_switch = ttk.Button(decomp_frame, text="Switching Matrix", command=self._demo_switching_decomposition)
-        btn_switch.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
-        
-        import_export_frame = ttk.Frame(self.demo_frame, style="Panel.TFrame")
-        import_export_frame.pack(fill=tk.X, pady=2)
-        
-        btn_import = ttk.Button(import_export_frame, text="Import Unitary", command=self._import_unitary_decomposition)
-        btn_import.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
-        
-        btn_export = ttk.Button(import_export_frame, text="Export Clements", command=self._export_clements_decomposition)
-        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 2))
-
-        btn_opt = ttk.Button(import_export_frame, text="🪄", command=self._optimize_unitary)
-        btn_opt.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
-        
-        btn_import_folder = ttk.Button(self.demo_frame, text="Import Unitary Folder", command=self._import_unitary_folder)
-        btn_import_folder.pack(fill=tk.X, pady=2)
-        
-        btn_clear = ttk.Button(self.demo_frame, text="Reset to Identity", command=self._demo_clear)
-        btn_clear.pack(fill=tk.X, pady=2)
+        self.hw_container = ttk.Frame(self.ui_container, style="Panel.TFrame")
+        build_hw_controls(self, self.hw_container)
+        # Not packed initially
 
         center_area = ttk.Frame(self.main_container, style="TFrame")
         center_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -446,31 +302,63 @@ class GUI:
         matrix_widget.configure(bg=self.colors['bg'], highlightthickness=0)
         matrix_widget.pack(fill=tk.BOTH, expand=True)
 
-    def _set_sim_exec(self):
-        """Switches execution to local Simulator mode."""
-        self.exec_mode.set("simulator")
-        self.btn_sim.config(bg=self.colors['accent'], fg="black")
-        self.btn_hw.config(bg="#333", fg="white")
+    def _import_hw_batch(self):
+        from tkinter import filedialog, messagebox
+        import requests
+        import json
+        
+        filepath = filedialog.askopenfilename(
+            title="Select Preprocessed Batch",
+            filetypes=[("JSON files", "*.json")]
+        )
+        if not filepath:
+            return
+            
+        with open(filepath, 'r') as f:
+            payload = json.load(f)
+            
+        # Add user info
+        payload["user_id"] = getattr(self, "user_id", "foosa")
+        
+        try:
+            resp = requests.post(f"http://{getattr(self, 'server_ip', '127.0.0.1')}:8000/api/v1/jobs", json=payload)
+            resp.raise_for_status()
+            job_id = resp.json().get('job_id', 'unknown')
+            messagebox.showinfo("Success", f"Job queued! ID: {job_id}")
+            if hasattr(self, 'lbl_hw_status'):
+                self.lbl_hw_status.config(text="Queued")
+            if hasattr(self, 'lbl_hw_target'):
+                self.lbl_hw_target.config(text=job_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to submit job:\n{e}")
 
-    def _set_hw_exec(self):
-        """Initiates handshake and switches execution to Hardware mode."""
+    def _on_live_toggle(self):
+        """Initiates handshake and switches between UI panels based on the toggle state."""
         from tkinter import messagebox
         import requests
         
+        if not self.is_live.get():
+            # Switching OFF Live Mode
+            self.lbl_live_dot.pack_forget()
+            self.hw_container.pack_forget()
+            self.sim_container.pack(fill=tk.X)
+            self.btn_toggle_live.config(fg="white", selectcolor="#333")
+            return
+
         dialog = tk.Toplevel(self.root)
         dialog.title("Hardware Authentication")
         dialog.geometry("300x260")
         dialog.configure(bg=self.colors['panel'])
         dialog.transient(self.root)
-        dialog.grab_set()
 
         ttk.Label(dialog, text="Server IP (Tailscale):", style="Panel.TLabel").pack(pady=(10, 2))
         ip_entry = tk.Entry(dialog, bg="#333", fg="white", insertbackground="white")
-        ip_entry.insert(0, "127.0.0.1")
+        ip_entry.insert(0, getattr(self, "server_ip", "127.0.0.1"))
         ip_entry.pack(pady=2, padx=20, fill=tk.X)
 
         ttk.Label(dialog, text="User ID:", style="Panel.TLabel").pack(pady=(5, 2))
         user_entry = tk.Entry(dialog, bg="#333", fg="white", insertbackground="white")
+        user_entry.insert(0, getattr(self, "user_id", ""))
         user_entry.pack(pady=2, padx=20, fill=tk.X)
         
         ttk.Label(dialog, text="Password:", style="Panel.TLabel").pack(pady=(5, 2))
@@ -485,7 +373,6 @@ class GUI:
                 messagebox.showerror("Error", "Please fill in all fields.", parent=dialog)
                 return
             
-            # Change login button to reflect loading
             btn.config(text="Connecting...", state="disabled")
             dialog.update()
 
@@ -496,17 +383,93 @@ class GUI:
                 
                 self.server_ip = ip
                 self.user_id = user
-                self.exec_mode.set("hardware")
-                self.btn_sim.config(bg="#333", fg="white")
-                self.btn_hw.config(bg=self.colors['accent'], fg="black")
+                
                 dialog.destroy()
+                
+                # Activate Live Mode UI
+                self.lbl_live_dot.pack(side=tk.RIGHT, padx=(0, 2), before=self.btn_toggle_live)
+                self.btn_toggle_live.config(fg="#ff4444", selectcolor="#333")
+                self.sim_container.pack_forget()
+                self.hw_container.pack(fill=tk.X)
+                
+                # Start WebSocket listener thread
+                import threading
+                threading.Thread(target=self._ws_listener, daemon=True).start()
+                
                 messagebox.showinfo("Authenticated", f"Securely connected to lab server at {ip} as {user}.", parent=self.root)
+                
             except Exception as e:
                 btn.config(text="Login", state="normal")
-                messagebox.showerror("Connection Failed", f"Could not reach server at {ip}:8000.\n\nMake sure the FastAPI server is running and Tailscale IP is correct.\nError: {e}", parent=dialog)
+                messagebox.showerror("Connection Failed", f"Could not reach server at {ip}:8000.\nError: {e}", parent=dialog)
+                self.is_live.set(False)
                 
+        def on_cancel():
+            self.is_live.set(False)
+            dialog.destroy()
+            
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
         btn = tk.Button(dialog, text="Login", bg=self.colors['accent'], fg="black", font=("Arial", 10, "bold"), command=attempt_login)
         btn.pack(pady=15)
+        
+        try:
+            dialog.wait_visibility()
+            dialog.grab_set()
+        except tk.TclError:
+            pass
+
+    def _ws_listener(self):
+        import asyncio
+        import websockets
+        import json
+
+        async def listen():
+            uri = f"ws://{self.server_ip}:8000/ws/telemetry/{self.user_id}"
+            try:
+                async with websockets.connect(uri) as websocket:
+                    self.is_ws_connected = True
+                    while self.is_live.get():
+                        message = await websocket.recv()
+                        data = json.loads(message)
+                        self.root.after(0, lambda d=data: self._process_telemetry(d))
+            except Exception as e:
+                print(f"WebSocket Error: {e}")
+                self.is_ws_connected = False
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(listen())
+        
+    def _process_telemetry(self, data):
+        # Update labels in Hardware Control GUI
+        if "iteration" in data and hasattr(self, 'lbl_hw_iter'):
+            self.lbl_hw_iter.config(text=str(data["iteration"]))
+        if "loss" in data and hasattr(self, 'lbl_hw_loss'):
+            self.lbl_hw_loss.config(text=f"{data['loss']:.4f}")
+        if "status" in data and hasattr(self, 'lbl_hw_status'):
+            self.lbl_hw_status.config(text=data["status"])
+            
+        # Update physical output plot
+        if "measured_output_power" in data:
+            powers = data["measured_output_power"]
+            self.ax.clear()
+            self.ax.bar(range(1, len(powers)+1), powers, color=self.colors['accent'])
+            self.ax.set_ylim(0, 1.0)
+            self.ax.set_facecolor(self.colors['bg'])
+            self.fig.patch.set_facecolor(self.colors['bg'])
+            self.canvas_plot.draw()
+
+        # Update the digital twin phases
+        if "mesh_phases_rad" in data:
+            phases = data["mesh_phases_rad"]
+            for label, phase_vals in phases.items():
+                mzi = self.engine.mesh.mzi_grid.get(label)
+                if mzi:
+                    mzi.theta = phase_vals.get("theta", 0.0)
+                    mzi.phi = phase_vals.get("phi", 0.0)
+                    
+            # Compute inner classical state using the local digital twin and redraw
+            self.engine.propagate_classical(self.input_vars)
+            self._draw_mesh()
 
     def _set_sim_mode(self, mode):
         """Sets the simulation mode (quantum/classical) and updates UI."""
