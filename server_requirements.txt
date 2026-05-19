@@ -1,0 +1,11 @@
+jax
+jaxlib
+numpy
+matplotlib
+sympy
+optax
+fastapi
+uvicorn[standard]
+celery
+redis
+websockets
