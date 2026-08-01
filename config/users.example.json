@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to config/users.json. Keys are Tailscale login names exactly as `tailscale status` reports them. Unlisted tailnet users are denied unless default_role is set.",
+  "default_role": null,
+  "users": {
+    "you@github": {"role": "admin"},
+    "labmate@github": {"role": "operator"},
+    "student@github": {"role": "viewer"}
+  },
+  "quotas": {
+    "operator": {"max_concurrent_jobs": 2, "max_lease_seconds": 1800, "max_jobs_per_day": 200}
+  }
+}

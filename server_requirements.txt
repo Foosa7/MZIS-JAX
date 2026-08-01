@@ -1,7 +1,8 @@
+# Lab-machine (server) dependencies. The client only needs client_requirements.txt.
 jax
 jaxlib
 numpy
-matplotlib
+scipy
 sympy
 optax
 fastapi
@@ -9,3 +10,7 @@ uvicorn[standard]
 celery
 redis
 websockets
+httpx
+jsonschema
+# Real hardware only; the simulator backend does not need it.
+# qontrol
