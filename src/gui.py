@@ -1006,28 +1006,24 @@ class GUI:
             pnn_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
             if pnn_dir not in sys.path:
                 sys.path.append(pnn_dir)
-            from decompose.pnn import decompose_clements
-            
+            from decompose.pnn import decompose_clements, clements_to_engine_phases
+
             phis, thetas, alphas = decompose_clements(U_target, block='mzi')
-            
-            # Map to engine layout
-            # pnn.py 'theta' is half of engine's 'theta'
-            for col_idx, col in enumerate(self.engine.layout):
-                p = col_idx // 2
-                for mzi in col:
-                    q = mzi['mode_top']
-                    mid = mzi['id']
-                    
-                    theta_val = float(np.mod(2 * thetas[q, p], 2 * np.pi))
-                    phi_val = float(np.mod(phis[q, p], 2 * np.pi))
-                    
-                    self.phases[mid]['theta'] = theta_val
-                    self.phases[mid]['phi'] = phi_val
-                    
-                    if self.selected_mzi == mid:
-                        self.theta_var.set(theta_val / float(jnp.pi))
-                        self.phi_var.set(phi_val / float(jnp.pi))
-                        
+
+            # Translate into the engine's single-arm MZI convention. The residual
+            # screen is the output phase the mesh cannot apply (no output shifters).
+            settings, self.output_phase_screen = clements_to_engine_phases(
+                phis, thetas, alphas, self.engine.layout
+            )
+
+            for mid, (theta_val, phi_val) in settings.items():
+                self.phases[mid]['theta'] = theta_val
+                self.phases[mid]['phi'] = phi_val
+
+                if self.selected_mzi == mid:
+                    self.theta_var.set(theta_val / float(jnp.pi))
+                    self.phi_var.set(phi_val / float(jnp.pi))
+
             if keep_inputs:
                 for i in range(self.n_modes):
                     self.input_vars[i] = saved_inputs[i]

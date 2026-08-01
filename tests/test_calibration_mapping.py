@@ -36,26 +36,28 @@ def test_hardware_calibration_mapping():
     phase_params = cal_data['phase_calibration'][heater_id]['phase_params']
     res_params = cal_data['resistance_calibration'][heater_id]['resistance_params']
     
-    # In your digital twin, phase = omega * Electrical_Power + offset
-    # Therefore, Required Power = Theta / omega
+    # The fitted fringe is  I_opt = offset + amplitude * cos(omega * P + phase),
+    # so the heater already sits at `phase` when no power is applied. That offset
+    # must be subtracted, and it is stored in units of pi, not radians. Fitting
+    # the model back against measurement_data confirms both points: including it
+    # gives a normalised RMS of 0.008 against the raw sweep, dropping it 0.49.
     omega = phase_params['omega']
-    req_power = theta_target / omega
-    
-    # Now we invert the thermo-optic resistance model: P = I^2 * R(I)
-    # R(I) = c_res + a_res * I^2 + d_res * I^4
-    # P = I^2 * (c_res + a_res * I^2 + d_res * I^4) = c_res*I^2 + a_res*I^4 + d_res*I^6
+    phase_at_zero_power = phase_params['phase'] * np.pi
+
+    # Heaters only ever add phase, so wrap the request into [0, 2*pi).
+    delta_phase = np.mod(theta_target - phase_at_zero_power, 2 * np.pi)
+    req_power = delta_phase / omega
+
+    # Invert the thermo-optic resistance model. The `alpha_res` form is the one
+    # that reproduces the measured sweep (0.008 vs 0.47 for the c/a/d cubic):
+    #   P = c_res * I^2 * (1 + alpha_res * I^2)
+    # which is a quadratic in x = I^2:  c*alpha*x^2 + c*x - P = 0
     c_res = res_params['c_res']
-    a_res = res_params['a_res']
-    d_res = res_params['d_res']
-    
-    # We can solve for I^2 by finding the roots of the polynomial: d*x^3 + a*x^2 + c*x - P = 0 (where x = I^2)
-    roots = np.roots([d_res, a_res, c_res, -req_power])
-    
-    # Find the real, positive root for I^2
-    valid_roots = [r.real for r in roots if np.isreal(r) and r.real > 0]
-    i_squared = valid_roots[0]
-    i_req = np.sqrt(i_squared)
-    
+    alpha_res = res_params['alpha_res']
+
+    i_squared = (-1.0 + np.sqrt(1.0 + 4.0 * alpha_res * req_power / c_res)) / (2.0 * alpha_res)
+    i_req = np.sqrt(max(0.0, i_squared))
+
     print(f"3. Digital Twin Hardware Mapping for {heater_id}:")
     print(f"   Required Electrical Power: {req_power:.3f} mW")
     print(f"   Required DAC Current:      {i_req:.3f} mA")

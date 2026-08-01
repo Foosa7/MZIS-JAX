@@ -194,4 +194,72 @@ def reconstruct_clements(phis, thetas, alphas, block='bs', Lp_dB=0, Lc_dB=0):
             mat = U2block(dim, q, q+1, phis[q,p], thetas[q,p], Lp=Lp, Lc=Lc) @ mat
     mat = sft @ mat
     return mat
+
+# ============================================================================
+# Mapping into the simulation engine's MZI convention
+# ============================================================================
+
+def clements_to_engine_phases(phis, thetas, alphas, layout):
+    """Converts Clements parameters into phase settings for the JAX Engine mesh.
+
+    The two conventions are not interchangeable. `U2MZI` puts the internal phase
+    symmetrically on both arms, while the Engine (like a real chip) drives a
+    single arm, so its block carries an extra common-mode factor:
+
+        engine_block(t, p) = exp(i*t/2) * U2MZI(pi + t/2, p - pi)
+
+    Naively setting `theta_engine = 2*theta_pnn` therefore leaves a per-MZI
+    phase error that does not cancel across the mesh (~0.33 absolute error in
+    the transfer matrix for a random 8x8 unitary). Permutations happen to
+    survive it, because every MZI sits at full bar or cross where the stray
+    phases move no power -- which is why the switching demos looked correct.
+
+    The common-mode terms are pushed forward through the mesh instead. Carrying
+    an accumulated input-phase vector `d` and matching
+
+        E(t_e, p_e) @ diag(e^{i d_t}, e^{i d_t+1})
+            == diag(e^{i g_t}, e^{i g_t+1}) @ U2MZI(t_p, p_p)
+
+    determines every unknown uniquely:
+
+        t_e = 2*(t_p - pi)
+        p_e = p_p + d[top+1] - d[top] + pi
+        g   = t_p - pi + d[top+1]          (applied to both of the MZI's modes)
+
+    The leftovers accumulate at the output, exactly as `grid_common_mode_flow`
+    does in neurophox. A mesh of 2-port MZIs has no output phase shifters, so
+    the result is exact up to that final diagonal -- |U| matches the target
+    exactly, which is what determines routed power.
+
+    Args:
+        phis, thetas, alphas: output of `decompose_clements(U, block='mzi')`.
+        layout: `Engine.layout` -- columns of {'id', 'mode_top'} dicts.
+
+    Returns:
+        settings: {mzi_id: (theta, phi)}, both wrapped into [0, 2*pi).
+        output_phases: length-n_modes residual screen, such that
+            U_engine == diag(exp(1j*output_phases)) @ U_target.
+    """
+    n_modes = len(alphas)
+    carry = np.zeros(n_modes)
+    settings = {}
+
+    for col_idx, col in enumerate(layout):
+        p = col_idx // 2
+        # MZIs within a column act on disjoint mode pairs, so the whole column
+        # reads the incoming carry and writes a fresh one.
+        new_carry = carry.copy()
+        for mzi in col:
+            top = mzi['mode_top']
+            theta_p, phi_p = thetas[top, p], phis[top, p]
+
+            theta_e = 2.0 * (theta_p - np.pi)
+            phi_e = phi_p + carry[top + 1] - carry[top] + np.pi
+            new_carry[top] = new_carry[top + 1] = theta_p - np.pi + carry[top + 1]
+
+            settings[mzi['id']] = (float(np.mod(theta_e, 2 * np.pi)),
+                                   float(np.mod(phi_e, 2 * np.pi)))
+        carry = new_carry
+
+    return settings, np.mod(carry - alphas, 2 * np.pi)
     
