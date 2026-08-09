@@ -1,3 +1,6 @@
 __pycache__/
 jax_env/
 neurophox
+
+# fit_crosstalk.py stage-1 cache
+.fitcache/
